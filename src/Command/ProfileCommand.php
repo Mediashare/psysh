@@ -196,7 +196,7 @@ HELP
     {
         // A bit of a hack, but it works for now.
         if (\strpos($code, ';') === false) {
-            $code = 'return '.$code;
+            $code = 'return '.$code.';';
         }
 
         return $code;

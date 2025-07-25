@@ -45,22 +45,24 @@ class ProfileCommandTest extends \Psy\Test\TestCase
         $this->assertStringContainsString('Memory (KB)', $output);
     }
 
-    public function testProfileCommandWithOutFile()
+    public function testProfileCommandWithExpression()
     {
         if (!\extension_loaded('xdebug')) {
             $this->markTestSkipped('Xdebug extension is not loaded.');
         }
 
         $tester = new CommandTester($this->command);
-        $outFile = \tempnam(\sys_get_temp_dir(), 'profile');
         $tester->execute([
-            'code' => 'echo "hello";',
-            '--out' => $outFile,
+            'code' => '1 + 1',
         ]);
 
         $output = $tester->getDisplay();
-        $this->assertStringContainsString('Profiling data saved to:', $output);
-        $this->assertFileExists($outFile);
-        \unlink($outFile);
+        $this->assertStringContainsString('Total Time:', $output);
+        $this->assertStringContainsString('Memory:', $output);
+        $this->assertStringContainsString('Function', $output);
+        $this->assertStringContainsString('Calls', $output);
+        $this->assertStringContainsString('Time (ms)', $output);
+        $this->assertStringContainsString('Memory (KB)', $output);
     }
+}
 }
