@@ -45,15 +45,19 @@ class ProfileCommandTest extends \Psy\Test\TestCase
         $this->assertStringContainsString('Memory (KB)', $output);
     }
 
-    public function testProfileCommandWithExpression()
+    public function testProfileCommandWithContext()
     {
         if (!\extension_loaded('xdebug')) {
             $this->markTestSkipped('Xdebug extension is not loaded.');
         }
 
+        $shell = new Shell();
+        $shell->setScopeVariables(['a' => 1, 'b' => 2]);
+        $this->command->setApplication($shell);
+
         $tester = new CommandTester($this->command);
         $tester->execute([
-            'code' => '1 + 1',
+            'code' => '$a + $b',
         ]);
 
         $output = $tester->getDisplay();
@@ -64,5 +68,6 @@ class ProfileCommandTest extends \Psy\Test\TestCase
         $this->assertStringContainsString('Time (ms)', $output);
         $this->assertStringContainsString('Memory (KB)', $output);
     }
+}
 }
 }

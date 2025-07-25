@@ -16,6 +16,7 @@ use Symfony\Component\Console\Helper\Table;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
+use Psy\Shell;
 use Symfony\Component\Process\Process;
 
 /**
@@ -61,12 +62,21 @@ HELP
         $outFile = $input->getOption('out');
         $tmpDir = \sys_get_temp_dir();
 
+        // Extract the current context
+        $context = $this->getApplication()->getScopeVariables();
+        $contextCode = '';
+        foreach ($context as $name => $value) {
+            if ($name !== 'this') { // Exclude $this to avoid serialization issues
+                $contextCode .= \sprintf('%s = \unserialize(%s);', $name, \var_export(\serialize($value), true));
+            }
+        }
+
         $process = new Process([
             PHP_BINARY,
             '-d', 'xdebug.mode=profile',
             '-d', 'xdebug.start_with_request=yes',
             '-d', 'xdebug.output_dir='.$tmpDir,
-            '-r', $code,
+            '-r', $contextCode.$code,
         ]);
 
         $process->run();
