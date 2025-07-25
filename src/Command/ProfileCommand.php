@@ -1,7 +1,7 @@
 <?php
 
 /*
- * This file is part of PsySH
+ * This file is part of PsySH.
  *
  * (c) 2012-2023 Justin Hileman
  *
@@ -11,9 +11,8 @@
 
 namespace Psy\Command;
 
-use Psy\Exception\RuntimeException;
+use Psy\Input\CodeArgument;
 use Symfony\Component\Console\Helper\Table;
-use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
@@ -32,168 +31,174 @@ class ProfileCommand extends Command
         $this
             ->setName('profile')
             ->setDefinition([
-                new InputArgument('code', InputArgument::REQUIRED, 'The code to profile.'),
-                new InputOption('out', null, InputOption::VALUE_REQUIRED, 'Export the cachegrind output to a file.'),
+                new InputOption('out', '', InputOption::VALUE_REQUIRED, 'Path to the output file for the profiling data.'),
+                new CodeArgument('code', CodeArgument::REQUIRED, 'The code to profile.'),
             ])
             ->setDescription('Profile a string of PHP code and display the execution summary.')
             ->setHelp(
                 <<<'HELP'
 Profile a string of PHP code and display the execution summary.
 
-This command uses Xdebug to profile the given code and provides a summary
-of the top functions by execution time.
-
 e.g.
-<return>profile for ($i = 0; $i < 1000; $i++) { md5('hello'); }</return>
-
-To save the raw cachegrind output for analysis in an external tool like KCacheGrind, use the `--out` option:
-
-e.g.
-<return>profile --out=profile.grind 'str_repeat("a", 10000)'</return>
+<return>> profile sleep(1)</return>
+<return>> profile --out=profile.grind file_get_contents('https://example.com')</return>
 HELP
             );
     }
 
     /**
      * {@inheritdoc}
-     *
-     * @throws \Psy\Exception\RuntimeException if the Xdebug extension is not installed
      */
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         if (!\extension_loaded('xdebug')) {
-            throw new RuntimeException('The Xdebug extension is required to use the profile command.');
+            $output->writeln('<error>Xdebug extension is not loaded. The profile command is unavailable.</error>');
+
+            return 1;
         }
 
-        $code = $input->getArgument('code');
-        $outputFile = $input->getOption('out');
-        $tempDir = \sys_get_temp_dir();
-
-        // Find the profiler file before we run, in case there are leftovers.
-        $beforeFiles = \glob($tempDir.'/cachegrind.out.*');
+        $code = $this->cleanCode($input->getArgument('code'));
+        $outFile = $input->getOption('out');
+        $tmpDir = \sys_get_temp_dir();
 
         $process = new Process([
             PHP_BINARY,
             '-d', 'xdebug.mode=profile',
             '-d', 'xdebug.start_with_request=yes',
-            '-d', "xdebug.output_dir={$tempDir}",
+            '-d', 'xdebug.output_dir='.$tmpDir,
             '-r', $code,
         ]);
 
         $process->run();
 
-        if (!$process->isSuccessful()) {
-            $output->writeln('<error>Failed to profile code:</error>');
-            $output->write($process->getErrorOutput());
+        if (!($process->isSuccessful())) {
+            $output->writeln('<error>Failed to execute profiling process.</error>');
+            $output->writeln($process->getErrorOutput());
 
-            return self::FAILURE;
+            return 1;
         }
 
-        $afterFiles = \glob($tempDir.'/cachegrind.out.*');
-        $newFiles = \array_diff($afterFiles, $beforeFiles);
+        $profileFile = $this->findLatestProfileFile($tmpDir);
+        if ($profileFile === null) {
+            $output->writeln('<error>Could not find a cachegrind output file.</error>');
 
-        if (empty($newFiles)) {
-            $output->writeln('<warning>Profiler output file not found.</warning>');
-
-            return self::FAILURE;
+            return 1;
         }
 
-        // Get the latest created file
-        \usort($newFiles, function ($a, $b) {
-            return \filemtime($b) <=> \filemtime($a);
-        });
-        $profilerFile = $newFiles[0];
-
-        if ($outputFile) {
-            \rename($profilerFile, $outputFile);
-            $output->writeln(\sprintf('Profiler output saved to: %s', $outputFile));
+        if ($outFile) {
+            \rename($profileFile, $outFile);
+            $output->writeln(\sprintf('<info>Profiling data saved to: %s</info>', $outFile));
         } else {
-            $this->displaySummary($output, $profilerFile);
-            \unlink($profilerFile);
+            $this->displaySummary($output, $profileFile);
+            \unlink($profileFile);
         }
 
-        return self::SUCCESS;
+        return 0;
     }
 
-    /**
-     * Parse the cachegrind file and display a summary table.
-     *
-     * @param OutputInterface $output
-     * @param string          $profilerFile
-     */
-    private function displaySummary(OutputInterface $output, string $profilerFile)
+    private function findLatestProfileFile(string $dir): ?string
     {
-        $file = @\fopen($profilerFile, 'r');
-        if ($file === false) {
-            throw new RuntimeException('Unable to read profiler output file.');
+        $files = \glob($dir.'/cachegrind.out.*');
+        if (empty($files)) {
+            return null;
         }
 
-        $functions = [];
-        $currentFunction = null;
-        $totalCost = 0;
+        \usort($files, function ($a, $b) {
+            return \filemtime($b) <=> \filemtime($a);
+        });
 
-        // First pass to get total cost from summary line
-        while (($line = \fgets($file)) !== false) {
-            if (\strpos(\trim($line), 'summary:') === 0) {
-                $totalCost = (int) \substr(\trim($line), 8);
-                break;
-            }
-        }
+        return $files[0];
+    }
 
-        if ($totalCost === 0) {
-            $output->writeln('<warning>Could not determine total execution cost from profiler output.</warning>');
-            \fclose($file);
+    private function displaySummary(OutputInterface $output, string $profileFile)
+    {
+        $data = $this->parseCachegrindFile($profileFile);
+
+        if (empty($data['functions'])) {
+            $output->writeln('<warning>No profiling data found in the output file.</warning>');
 
             return;
         }
 
-        // Rewind and parse function costs
-        \rewind($file);
-        while (($line = \fgets($file)) !== false) {
-            $line = \trim($line);
-            if (\strpos($line, 'fn=') === 0) {
-                $currentFunction = \substr($line, 3);
-                if (!isset($functions[$currentFunction])) {
-                    $functions[$currentFunction] = ['cost' => 0, 'calls' => 0];
-                }
-            } elseif ($currentFunction && @\ctype_digit($line[0])) {
-                $parts = \explode(' ', $line);
-                // The second number on a line following `fn=` is the self-cost.
-                if (isset($parts[1])) {
-                    $functions[$currentFunction]['cost'] += (int) $parts[1];
-                }
-                // A line with cost info represents one call, so we can count them.
-                $functions[$currentFunction]['calls']++;
-            }
-        }
-        \fclose($file);
+        $timeUnit = $data['summary']['time_unit'] ?? 100;
+        $totalTime = ($data['summary']['time'] * $timeUnit) / 1000000;
+        $totalMem = $data['summary']['memory'] / 1024;
 
-        // Filter out zero-cost entries and sort by cost
-        $functions = \array_filter($functions, function ($data) {
-            return $data['cost'] > 0;
-        });
-        \uasort($functions, function ($a, $b) {
-            return $b['cost'] <=> $a['cost'];
-        });
+        $output->writeln(\sprintf(
+            '<info>Total Time: %.2f ms, Memory: %.2f KB</info>',
+            $totalTime,
+            $totalMem
+        ));
 
-        $output->writeln('Profiling summary:');
         $table = new Table($output);
-        $table->setHeaders(['Function', 'Time (self)', '%', 'Calls']);
+        $table->setHeaders(['Function', 'Calls', 'Time (ms)', 'Memory (KB)']);
 
-        $rowCount = 0;
-        foreach ($functions as $name => $data) {
-            if (++$rowCount > 10) {
-                break; // Limit to top 10
-            }
-            $percentage = ($data['cost'] / $totalCost) * 100;
+        \usort($data['functions'], function ($a, $b) {
+            return $b['time'] <=> $a['time'];
+        });
+        $functions = \array_slice($data['functions'], 0, 15);
+
+        foreach ($functions as $func) {
             $table->addRow([
-                $name,
-                \number_format($data['cost']),
-                \number_format($percentage, 2),
-                $data['calls'],
+                $func['name'],
+                $func['calls'],
+                \sprintf('%.2f', ($func['time'] * $timeUnit) / 1000000),
+                \sprintf('%.2f', $func['memory'] / 1024),
             ]);
         }
 
         $table->render();
+    }
+
+    private function parseCachegrindFile(string $filePath): array
+    {
+        $file = \fopen($filePath, 'r');
+        if (!($file)) {
+            return ['summary' => [], 'functions' => []];
+        }
+
+        $summary = [];
+        $functions = [];
+        $currentFunc = null;
+        $timeUnit = 100;
+
+        while (($line = \fgets($file)) !== false) {
+            $line = \trim($line);
+            if (empty($line) || \strpos($line, '#') === 0) {
+                continue;
+            }
+
+            if (\preg_match('/^summary:\s+(\d+)\s+(\d+)/', $line, $matches)) {
+                $summary = ['time' => (int) $matches[1], 'memory' => (int) $matches[2]];
+            } elseif (\preg_match('/^events:\s*Time\s*\((\d+)ns\)/', $line, $matches)) {
+                $timeUnit = (int) $matches[1];
+            } elseif (\preg_match('/^fn=(.+)/', $line, $matches)) {
+                $currentFunc = $matches[1];
+                if (!isset($functions[$currentFunc])) {
+                    $functions[$currentFunc] = ['name' => $currentFunc, 'calls' => 0, 'time' => 0, 'memory' => 0];
+                }
+            } elseif ($currentFunc && \preg_match('/^calls=(\d+)/', $line, $matches)) {
+                $functions[$currentFunc]['calls'] += $matches[1];
+            } elseif ($currentFunc && \preg_match('/^\d+\s+(\d+)\s+(\d+)$/', $line, $matches)) {
+                $functions[$currentFunc]['time'] += (int) $matches[1];
+                $functions[$currentFunc]['memory'] += (int) $matches[2];
+            }
+        }
+
+        \fclose($file);
+
+        $summary['time_unit'] = $timeUnit;
+
+        return ['summary' => $summary, 'functions' => \array_values($functions)];
+    }
+
+    private function cleanCode(string $code): string
+    {
+        // A bit of a hack, but it works for now.
+        if (\strpos($code, ';') === false) {
+            $code = 'return '.$code;
+        }
+
+        return $code;
     }
 }

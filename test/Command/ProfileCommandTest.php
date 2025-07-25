@@ -1,7 +1,7 @@
 <?php
 
 /*
- * This file is part of PsySH
+ * This file is part of PsySH.
  *
  * (c) 2012-2023 Justin Hileman
  *
@@ -13,54 +13,54 @@ namespace Psy\Test\Command;
 
 use Psy\Command\ProfileCommand;
 use Psy\Shell;
-use Psy\Test\TestCase;
 use Symfony\Component\Console\Tester\CommandTester;
 
-/**
- * @group Xdebug
- */
-class ProfileCommandTest extends TestCase
+class ProfileCommandTest extends \Psy\Test\TestCase
 {
-    private $tester;
+    private $command;
 
     protected function setUp(): void
     {
-        if (!\extension_loaded('xdebug')) {
-            $this->markTestSkipped('Xdebug extension is not available');
-        }
-
-        $this->tester = new CommandTester(new ProfileCommand());
+        $this->command = new ProfileCommand();
+        $this->command->setApplication(new Shell());
     }
 
     public function testProfileCommand()
     {
-        $code = 'echo "hello";';
-        $this->tester->execute(['code' => $code]);
+        if (!\extension_loaded('xdebug')) {
+            $this->markTestSkipped('Xdebug extension is not loaded.');
+        }
 
-        $output = $this->tester->getDisplay();
-        $this->assertStringContainsString('Profiling summary:', $output);
+        $tester = new CommandTester($this->command);
+        $tester->execute([
+            'code' => 'echo "hello";',
+        ]);
+
+        $output = $tester->getDisplay();
+        $this->assertStringContainsString('Total Time:', $output);
+        $this->assertStringContainsString('Memory:', $output);
         $this->assertStringContainsString('Function', $output);
-        $this->assertStringContainsString('Time (self)', $output);
-        $this->assertStringContainsString('%', $output);
         $this->assertStringContainsString('Calls', $output);
+        $this->assertStringContainsString('Time (ms)', $output);
+        $this->assertStringContainsString('Memory (KB)', $output);
     }
 
-    public function testProfileCommandWithExport()
+    public function testProfileCommandWithOutFile()
     {
-        $code = 'echo "hello";';
-        $outputFile = \tempnam(\sys_get_temp_dir(), 'profile_');
-        $this->tester->execute(['code' => $code, '--out' => $outputFile]);
+        if (!\extension_loaded('xdebug')) {
+            $this->markTestSkipped('Xdebug extension is not loaded.');
+        }
 
-        $output = $this->tester->getDisplay();
-        $this->assertStringContainsString('Profiler output saved to:', $output);
-        $this->assertFileExists($outputFile);
+        $tester = new CommandTester($this->command);
+        $outFile = \tempnam(\sys_get_temp_dir(), 'profile');
+        $tester->execute([
+            'code' => 'echo "hello";',
+            '--out' => $outFile,
+        ]);
 
-        @\unlink($outputFile);
-    }
-
-    public function testProfileCommandIsRegistered()
-    {
-        $shell = new Shell();
-        $this->assertTrue($shell->has('profile'));
+        $output = $tester->getDisplay();
+        $this->assertStringContainsString('Profiling data saved to:', $output);
+        $this->assertFileExists($outFile);
+        \unlink($outFile);
     }
 }

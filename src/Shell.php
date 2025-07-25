@@ -103,6 +103,11 @@ class Shell extends Application
         \Psy\info($this->config);
     }
 
+    public function getConfig(): Configuration
+    {
+        return $this->config;
+    }
+
     /**
      * Check whether the first thing in a backtrace is an include call.
      *
@@ -220,11 +225,13 @@ class Shell extends Application
             new Command\ClearCommand(),
             new Command\EditCommand($this->config->getRuntimeDir(false)),
             new Command\ProfileCommand(),
+            new Command\ProfileCommand(),
             new Command\HotspotsCommand(),
             new Command\MemoryMapCommand(),
             new Command\CompareCommand(),
             new Command\SmartTraceCommand(),
             new Command\CoverageCommand(),
+            new Command\StackCommand(),
             // new Command\PsyVersionCommand(),
             $sudo,
             $hist,
