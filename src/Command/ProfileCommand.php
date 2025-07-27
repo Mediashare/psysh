@@ -65,19 +65,88 @@ HELP
         // Extract the current context
         $context = $this->getApplication()->getScopeVariables();
         $contextCode = '';
+        $excludedVars = [];
+        
         foreach ($context as $name => $value) {
             if ($name !== 'this') { // Exclude $this to avoid serialization issues
-                $contextCode .= \sprintf('%s = \unserialize(%s);', $name, \var_export(\serialize($value), true));
+                // Ensure variable name starts with $
+                $varName = \str_starts_with($name, '$') ? $name : '$' . $name;
+                
+                // Check if the value can be serialized (exclude closures, resources, etc.)
+                if ($this->canSerialize($value)) {
+                    $contextCode .= \sprintf('%s = \unserialize(%s);', $varName, \var_export(\serialize($value), true));
+                } else {
+                    // For closures and other non-serializable objects, we can't transfer them
+                    $excludedVars[] = \sprintf('%s (%s)', $varName, \gettype($value));
+                    // Add a comment or placeholder to indicate the variable was excluded
+                    $contextCode .= \sprintf('// Variable %s (type: %s) excluded - not serializable\n', $varName, \gettype($value));
+                }
             }
         }
+        
+        // Warn user about excluded variables
+        if (!empty($excludedVars)) {
+            $output->writeln('<comment>Note: The following variables are not available in the profiled context:</comment>');
+            foreach ($excludedVars as $var) {
+                $output->writeln('<comment>  - ' . $var . '</comment>');
+            }
+            $output->writeln('');
+        }
 
+        // Create a script that sets up context and executes the code
+        $psyshScript = '';
+        
+        // Add context setup
+        foreach ($context as $name => $value) {
+            if ($name !== 'this' && $this->canSerialize($value)) {
+                $varName = \str_starts_with($name, '$') ? $name : '$' . $name;
+                $psyshScript .= sprintf('%s = unserialize(%s);', $varName, var_export(serialize($value), true)) . "\n";
+            }
+        }
+        
+        // Add the code to execute
+        $psyshScript .= $code . "\n";
+        $psyshScript .= "exit\n"; // Exit PsySH after execution
+        
+        // Debug: Show the generated script
+        if (\getenv('PSYSH_DEBUG')) {
+            $output->writeln('<comment>Generated PsySH script:</comment>');
+            $output->writeln($psyshScript);
+        }
+
+        // First, run the code in a PsySH sub-shell to capture its output (without profiling)
+        $psyshBinary = realpath(__DIR__ . '/../../bin/psysh');
+        $outputProcess = new Process([
+            PHP_BINARY,
+            $psyshBinary,
+        ]);
+        $outputProcess->setInput($psyshScript);
+        $outputProcess->run();
+        
+        // Debug the output process
+        if (\getenv('PSYSH_DEBUG')) {
+            $output->writeln('<comment>Output process exit code: ' . $outputProcess->getExitCode() . '</comment>');
+            $output->writeln('<comment>Output process raw output: "' . addslashes($outputProcess->getOutput()) . '"</comment>');
+            $output->writeln('<comment>Output process error: "' . addslashes($outputProcess->getErrorOutput()) . '"</comment>');
+        }
+        
+        // Show the output from the code
+        $processOutput = trim($outputProcess->getOutput());
+        if (!empty($processOutput)) {
+            $output->writeln('<info>Code output:</info>');
+            $output->writeln($processOutput);
+            $output->writeln('');
+        }
+        
+        // Now run the profiling process with PsySH
         $process = new Process([
             PHP_BINARY,
             '-d', 'xdebug.mode=profile',
             '-d', 'xdebug.start_with_request=yes',
             '-d', 'xdebug.output_dir='.$tmpDir,
-            '-r', $contextCode.$code,
+            $psyshBinary,
         ]);
+        $process->setInput($psyshScript);
 
         $process->run();
 
@@ -210,5 +279,28 @@ HELP
         }
 
         return $code;
+    }
+
+    /**
+     * Check if a value can be safely serialized.
+     */
+    private function canSerialize($value): bool
+    {
+        // Check for common non-serializable types
+        if (\is_resource($value)) {
+            return false;
+        }
+
+        if ($value instanceof \Closure) {
+            return false;
+        }
+
+        // Try to serialize and catch any exceptions
+        try {
+            \serialize($value);
+            return true;
+        } catch (\Exception $e) {
+            return false;
+        }
     }
 }
