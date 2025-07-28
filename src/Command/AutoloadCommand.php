@@ -5,9 +5,6 @@ namespace Psy\Command;
 use Psy\Command\Command;
 use Psy\Input\ShellInput;
 use Psy\Shell;
-use Psy\TabCompletion\Matcher\LaravelServiceMatcher;
-use Psy\TabCompletion\Matcher\SymfonyParameterMatcher;
-use Psy\TabCompletion\Matcher\SymfonyServiceMatcher;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
@@ -335,19 +332,19 @@ class AutoloadCommand extends Command
         $matchers = [];
 
         // Ajoute les matchers selon le framework
-        switch ($this->detectedFramework) {
-            case 'symfony':
-                if (isset($this->loadedVariables['container'])) {
-                    $matchers[] = new SymfonyServiceMatcher($this->loadedVariables['container']);
-                    $matchers[] = new SymfonyParameterMatcher($this->loadedVariables['container']);
-                }
-                break;
-            case 'laravel':
-                if (isset($this->loadedVariables['app'])) {
-                    $matchers[] = new LaravelServiceMatcher($this->loadedVariables['app']);
-                }
-                break;
-        }
+        // switch ($this->detectedFramework) {
+        //     case 'symfony':
+        //         if (isset($this->loadedVariables['container'])) {
+        //             $matchers[] = new SymfonyServiceMatcher($this->loadedVariables['container']);
+        //             $matchers[] = new SymfonyParameterMatcher($this->loadedVariables['container']);
+        //         }
+        //         break;
+        //     case 'laravel':
+        //         if (isset($this->loadedVariables['app'])) {
+        //             $matchers[] = new LaravelServiceMatcher($this->loadedVariables['app']);
+        //         }
+        //         break;
+        // }
 
         $config->addMatchers($matchers);
     }
