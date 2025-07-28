@@ -236,6 +236,7 @@ class Shell extends Application
             new Command\TraceHttpCommand(),
             new Command\ExplainCommand(),
             new Command\StackCommand(),
+            new Command\AutoloadCommand(),
             // new Command\PsyVersionCommand(),
             $sudo,
             $hist,
