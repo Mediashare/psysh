@@ -199,51 +199,76 @@ HELP
             return;
         }
 
-        $timeUnit = $data['summary']['time_unit'] ?? 100;
-        $totalTime = ($data['summary']['time'] * $timeUnit) / 1000000;
-        $totalMem = $data['summary']['memory'] / 1024;
+        $timeUnit = $data['summary']['time_unit'] ?? 1; // Default to 1 ns
 
+        // Calculate totals from function data for better accuracy
+        $totalTime = 0;
+        $totalMem = 0;
+        foreach ($data['functions'] as $func) {
+            $totalTime += $func['time'];
+            $totalMem += $func['memory'];
+        }
+
+        $totalTimeMs = ($totalTime * $timeUnit) / 1000000;
+        $totalMemKb = $totalMem / 1024;
+
+        $output->writeln('<info>Profiling results:</info>');
         $output->writeln(\sprintf(
-            '<info>Total Time: %.2f ms, Memory: %.2f KB</info>',
-            $totalTime,
-            $totalMem
+            '<comment>Note: Total time includes PsySH overhead. Focus on relative percentages for performance analysis.</comment>'
         ));
+        $output->writeln('');
 
         $table = new Table($output);
-        $table->setHeaders(['Function', 'Calls', 'Time (ms)', 'Memory (KB)']);
+        $table->setHeaders(['Function', 'Calls', 'Time (ms)', 'Time %', 'Memory (KB)', 'Memory %']);
 
         \usort($data['functions'], function ($a, $b) {
             return $b['time'] <=> $a['time'];
         });
-        $functions = \array_slice($data['functions'], 0, 15);
+
+        $functions = \array_slice($data['functions'], 0, 20); // Show top 20
 
         foreach ($functions as $func) {
+            $timeMs = ($func['time'] * $timeUnit) / 1000000;
+            $memKb = $func['memory'] / 1024;
+            $timePct = $totalTimeMs > 0 ? ($timeMs / $totalTimeMs) * 100 : 0;
+            $memPct = $totalMemKb > 0 ? ($memKb / $totalMemKb) * 100 : 0;
+
             $table->addRow([
                 $func['name'],
                 $func['calls'],
-                \sprintf('%.2f', ($func['time'] * $timeUnit) / 1000000),
-                \sprintf('%.2f', $func['memory'] / 1024),
+                \sprintf('%.2f', $timeMs),
+                \sprintf('%.1f%%', $timePct),
+                \sprintf('%.2f', $memKb),
+                \sprintf('%.1f%%', $memPct),
             ]);
         }
 
         $table->render();
+        
+        $output->writeln('');
+        $output->writeln(\sprintf(
+            '<info>Total (top 20): Time: %.2f ms, Memory: %.2f KB</info>',
+            $totalTimeMs,
+            $totalMemKb
+        ));
     }
 
     private function parseCachegrindFile(string $filePath): array
     {
         $file = \fopen($filePath, 'r');
-        if (!($file)) {
+        if (!$file) {
             return ['summary' => [], 'functions' => []];
         }
 
         $summary = [];
         $functions = [];
         $currentFunc = null;
-        $timeUnit = 100;
+        $timeUnit = 1; // Default to 1 ns
 
         while (($line = \fgets($file)) !== false) {
             $line = \trim($line);
-            if (empty($line) || \strpos($line, '#') === 0) {
+
+            if (empty($line) || $line[0] === '#') {
                 continue;
             }
 
@@ -256,9 +281,9 @@ HELP
                 if (!isset($functions[$currentFunc])) {
                     $functions[$currentFunc] = ['name' => $currentFunc, 'calls' => 0, 'time' => 0, 'memory' => 0];
                 }
-            } elseif ($currentFunc && \preg_match('/^calls=(\d+)/', $line, $matches)) {
-                $functions[$currentFunc]['calls'] += $matches[1];
+                $functions[$currentFunc]['calls']++; // Each fn= is one call context.
             } elseif ($currentFunc && \preg_match('/^\d+\s+(\d+)\s+(\d+)$/', $line, $matches)) {
+                // This is a self-cost line: line_number, time, memory
                 $functions[$currentFunc]['time'] += (int) $matches[1];
                 $functions[$currentFunc]['memory'] += (int) $matches[2];
             }
