@@ -1,14 +1,5 @@
 <?php
 
-/*
- * This file is part of PsySH.
- *
- * (c) 2012-2023 Justin Hileman
- *
- * For the full copyright and license information, please view the LICENSE
- * file that was distributed with this source code.
- */
-
 namespace Psy\Command;
 
 use Psy\Input\CodeArgument;
@@ -16,17 +7,17 @@ use Symfony\Component\Console\Helper\Table;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
-use Psy\Shell;
 use Symfony\Component\Process\Process;
 
-/**
- * Profile a string of PHP code and display the execution summary.
- */
 class ProfileCommand extends Command
 {
-    /**
-     * {@inheritdoc}
-     */
+    private const PSYSH_NAMESPACES = [
+        'Psy\\',
+        'PhpParser\\',
+        'Symfony\\Component\\Console\\',
+        'Symfony\\Component\\VarDumper\\',
+    ];
+
     protected function configure()
     {
         $this
@@ -35,6 +26,7 @@ class ProfileCommand extends Command
                 new InputOption('out', '', InputOption::VALUE_REQUIRED, 'Path to the output file for the profiling data.'),
                 new InputOption('full', '', InputOption::VALUE_NONE, 'Show full profiling data including PsySH overhead.'),
                 new InputOption('filter', '', InputOption::VALUE_REQUIRED, 'Filter level: user (default), php, all', 'user'),
+                new InputOption('threshold', '', InputOption::VALUE_REQUIRED, 'Minimum time threshold in microseconds', '1000'),
                 new CodeArgument('code', CodeArgument::REQUIRED, 'The code to profile.'),
             ])
             ->setDescription('Profile a string of PHP code and display the execution summary.')
@@ -42,406 +34,395 @@ class ProfileCommand extends Command
                 <<<'HELP'
 Profile a string of PHP code and display the execution summary.
 
-e.g.
-<return>> profile sleep(1)</return>
-<return>> profile --out=profile.grind file_get_contents('https://example.com')</return>
-<return>> profile --full $a = [1,2,3]; array_map('strtoupper', $a)</return>
-<return>> profile --filter=php json_decode('{"test": true}')</return>
-
 Filter levels:
-- user (default): Shows only user code, excludes framework overhead
-- php: Shows user code + PHP internal functions
+- user: Shows only user code and project dependencies
+- php: Shows user code + PHP internal functions  
 - all: Shows everything including PsySH initialization
+
+Options:
+- --threshold: Minimum execution time to display (default: 1000μs)
+- --out: Export full cachegrind data to file
+
+Examples:
+> profile $calc->toBinary(1000)
+> profile --threshold=100 $service->process($data)
+> profile --full --out=profile.grind complex_operation()
 HELP
             );
     }
 
-    /**
-     * {@inheritdoc}
-     */
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         if (!\extension_loaded('xdebug')) {
             $output->writeln('<error>Xdebug extension is not loaded. The profile command is unavailable.</error>');
-
             return 1;
         }
 
-        $code = $this->cleanCode($input->getArgument('code'));
+        $code = $input->getArgument('code');
         $outFile = $input->getOption('out');
-        $tmpDir = \sys_get_temp_dir();
         $filterLevel = $input->getOption('full') ? 'all' : $input->getOption('filter');
+        $threshold = (int) $input->getOption('threshold');
 
-        // Prepare context
-        $shell = $this->getShell();
-        $context = $shell->getScopeVariables();
-        $contextCode = $this->buildContextCode($context, $output);
-
-        // Prepare the script to be executed
-        $script = $this->buildScript($contextCode, $code, $filterLevel);
-
-        // First, run the code in a sub-shell to capture its output (without profiling)
-        $this->runOutputProcess($script, $output);
-
-        // Now, run the profiling process
-        $process = $this->runProfilingProcess($script, $tmpDir, $filterLevel);
-
-        if (!$process->isSuccessful()) {
-            $output->writeln('<error>Failed to execute profiling process.</error>');
-            $output->writeln($process->getErrorOutput());
-
+        // Exécuter avec profilage
+        $result = $this->executeWithProfiling($code, $filterLevel, $output);
+        
+        if (!$result['success']) {
             return 1;
         }
 
-        $profileFile = $this->findLatestProfileFile($tmpDir);
-        if ($profileFile === null) {
-            $output->writeln('<error>Could not find a cachegrind output file.</error>');
+        // Analyser et afficher les résultats
+        $this->displayResults($result['data'], $output, $filterLevel, $threshold);
 
-            return 1;
-        }
-
-        // Handle the output
+        // Exporter si demandé
         if ($outFile) {
-            $this->exportProfile($profileFile, $outFile, $filterLevel);
-            $output->writeln(\sprintf('<info>Profiling data saved to: %s</info>', $outFile));
-        } else {
-            $this->displaySummary($output, $profileFile, $filterLevel);
+            $this->exportProfile($result['cachegrind'], $outFile, $output);
         }
-
-        \unlink($profileFile);
 
         return 0;
     }
 
-    private function buildContextCode(array $context, OutputInterface $output): string
+    private function createProfileScript(string $code, string $filterLevel, string $metricsFile): string
     {
-        $contextCode = '';
-        $excludedVars = [];
+        $shell = $this->getShell();
+        
+        // Récupérer le contexte actuel (variables, includes, etc.)
+        $context = $this->serializeContext($shell);
+        
+        // Créer un script qui:
+        // 1. Restaure le contexte
+        // 2. Définit un marqueur de début
+        // 3. Exécute le code utilisateur
+        // 4. Définit un marqueur de fin
+        
+        $script = <<<'PHP'
+<?php
+// Restoration du contexte
+%s
 
-        foreach ($context as $name => $value) {
-            if ($name === '_') { // Don't re-inject the last result
-                continue;
-            }
+// Marqueur de début du code utilisateur
+$__profile_start = microtime(true);
+$__profile_start_memory = memory_get_usage(true);
 
-            if ($name !== 'this' && $this->canSerialize($value)) {
-                $varName = (\strpos($name, '$') === 0) ? $name : '$'.$name;
-                $contextCode .= \sprintf('%s = \unserialize(%s);', $varName, \var_export(\serialize($value), true))."\n";
-            } else {
-                $excludedVars[] = \sprintf('%s (%s)', $name, \gettype($value));
-            }
-        }
+// === DÉBUT CODE UTILISATEUR ===
+try {
+    $__profile_result = eval(%s);
+    $__profile_success = true;
+} catch (\Throwable $__profile_exception) {
+    $__profile_result = $__profile_exception;
+    $__profile_success = false;
+}
+// === FIN CODE UTILISATEUR ===
 
-        if (!empty($excludedVars)) {
-            $output->writeln('<comment>Note: The following variables are not available in the profiled context:</comment>');
-            foreach ($excludedVars as $var) {
-                $output->writeln('<comment>  - '.$var.'</comment>');
-            }
-            $output->writeln('');
-        }
+$__profile_end = microtime(true);
+$__profile_end_memory = memory_get_usage(true);
 
-        return $contextCode;
+// Sauvegarder les métriques
+file_put_contents(%s, json_encode([
+    'success' => $__profile_success,
+    'start_time' => $__profile_start,
+    'end_time' => $__profile_end,
+    'duration' => ($__profile_end - $__profile_start) * 1000000,
+    'start_memory' => $__profile_start_memory,
+    'end_memory' => $__profile_end_memory,
+    'memory_delta' => $__profile_end_memory - $__profile_start_memory,
+    'result' => $__profile_success ? var_export($__profile_result, true) : $__profile_exception->getMessage(),
+]));
+PHP;
+        
+        return sprintf(
+            $script,
+            $context,
+            var_export($code, true),
+            var_export($metricsFile, true)
+        );
     }
 
-    private function buildScript(string $contextCode, string $userCode, string $filterLevel): string
+    private function serializeContext($shell): string
     {
-        $script = $contextCode;
-        $script .= $userCode."\n";
-
-        return $script;
-    }
-
-    private function runOutputProcess(string $script, OutputInterface $output)
-    {
-        $psyshBinary = \realpath(__DIR__.'/../../bin/psysh');
-        $process = new Process([PHP_BINARY, $psyshBinary]);
-        $process->setInput($script."\nexit\n");
-        $process->run();
-
-        $processOutput = \trim($process->getOutput());
-        if (!empty($processOutput)) {
-            $output->writeln('<info>Code output:</info>');
-            $output->writeln($processOutput);
-            $output->writeln('');
+        $context = [];
+        
+        // Récupérer toutes les variables du contexte
+        $vars = $shell->getScopeVariables();
+        foreach ($vars as $name => $value) {
+            if (!in_array($name, ['this', '_', '_e'])) {
+                $context[] = sprintf('$%s = %s;', $name, var_export($value, true));
+            }
         }
+        
+        // Récupérer les includes
+        $includes = $shell->getIncludes();
+        foreach ($includes as $file) {
+            $context[] = sprintf("require_once %s;", var_export($file, true));
+        }
+        
+        return implode("\n", $context);
     }
 
-    private function runProfilingProcess(string $script, string $tmpDir, string $filterLevel): Process
+    private function executeWithProfiling(string $code, string $filterLevel, OutputInterface $output): array
     {
-        $psyshBinary = \realpath(__DIR__.'/../../bin/psysh');
-        $processArgs = [PHP_BINARY];
-
-        // Always enable profiling with start_with_request=yes since Xdebug 3.x removed manual control functions
-        $processArgs = \array_merge($processArgs, [
+        $tmpDir = sys_get_temp_dir();
+        $scriptFile = tempnam($tmpDir, 'psysh_profile_script_');
+        
+        // Créer le fichier de métriques avec le même nom de base que le script
+        $metricsFile = str_replace('_script_', '_metrics_', $scriptFile);
+        
+        // Debugging: Check if the directory is writable
+        if (!is_writable($tmpDir)) {
+            throw new \RuntimeException('Le répertoire temporaire n\'est pas accessible en écriture: ' . $tmpDir);
+        }
+        
+        // Créer le script de profilage avec le bon chemin de fichier de métriques
+        $script = $this->createProfileScript($code, $filterLevel, $metricsFile);
+        
+        // Debugging: Afficher le script généré
+        $output->writeln('Generated script:');
+        $output->writeln('================');
+        $output->writeln($script);
+        $output->writeln('================');
+        
+        file_put_contents($scriptFile, $script);
+        
+        // Configuration Xdebug optimisée
+        $process = new Process([
+            PHP_BINARY,
+            '-d', 'memory_limit=-1',
             '-d', 'xdebug.mode=profile',
             '-d', 'xdebug.start_with_request=yes',
-            '-d', 'xdebug.output_dir='.$tmpDir,
+            '-d', 'xdebug.output_dir=' . $tmpDir,
+            '-d', 'xdebug.profiler_output_name=cachegrind.out.%t.%p',
+            '-d', 'xdebug.collect_params=1',
+            '-d', 'xdebug.collect_return=1',
+            $scriptFile
         ]);
-
-        $processArgs[] = $psyshBinary;
-
-        $process = new Process($processArgs);
-        $process->setInput($script."\nexit\n");
+        
         $process->run();
-
-        return $process;
+        
+        // Debugging: Afficher la sortie du process
+        $output->writeln('Process output: ' . $process->getOutput());
+        $output->writeln('Process error output: ' . $process->getErrorOutput());
+        $output->writeln('Process exit code: ' . $process->getExitCode());
+        
+        // Vérifier si le process s'est bien exécuté
+        if (!$process->isSuccessful()) {
+            throw new \RuntimeException('Erreur lors de l\'exécution du profiling: ' . $process->getErrorOutput());
+        }
+        
+        // Trouver le fichier cachegrind généré
+        $files = glob($tmpDir . '/cachegrind.out.*');
+        $output->writeln('Cachegrind files found: ' . print_r($files, true));
+        $cachegrindFile = end($files);
+        $output->writeln('Selected cachegrind file: ' . ($cachegrindFile ?: 'NONE'));
+        
+        // Vérifier que le fichier de métriques existe avant de le lire
+        if (!file_exists($metricsFile)) {
+            throw new \RuntimeException('Le fichier de métriques n\'a pas été créé: ' . $metricsFile);
+        }
+        
+        $output->writeln('Metrics file exists and contains: ' . substr(file_get_contents($metricsFile), 0, 200) . '...');
+        
+        // Lire les métriques avec gestion d'erreur
+        $metricsContent = file_get_contents($metricsFile);
+        if ($metricsContent === false) {
+            throw new \RuntimeException('Impossible de lire le fichier de métriques: ' . $metricsFile);
+        }
+        
+        $metrics = json_decode($metricsContent, true);
+        if ($metrics === null) {
+            throw new \RuntimeException('Impossible de décoder les métriques JSON: ' . json_last_error_msg());
+        }
+        
+        // Parser le fichier cachegrind
+        $profileData = $this->parseCachegrindEnhanced($cachegrindFile, $metrics);
+        
+        // Nettoyer
+        unlink($scriptFile);
+        if (file_exists($metricsFile)) {
+            unlink($metricsFile);
+        }
+        
+        return [
+            'success' => $metrics['success'],
+            'data' => $profileData,
+            'cachegrind' => $cachegrindFile,
+            'metrics' => $metrics
+        ];
     }
 
-    private function findLatestProfileFile(string $dir): ?string
+    private function parseCachegrindEnhanced(string $file, array $metrics): array
     {
-        $files = \glob($dir.'/cachegrind.out.*');
-        if (empty($files)) {
-            return null;
+        $content = file_get_contents($file);
+        $lines = explode("\n", $content);
+        
+        $functions = [];
+        $currentFunction = null;
+        $files = [];
+        
+        foreach ($lines as $line) {
+            // Parser les définitions de fichiers
+            if (preg_match('/^fl=\((\d+)\)\s+(.+)$/', $line, $matches)) {
+                $files[$matches[1]] = $matches[2];
+                continue;
+            }
+            
+            // Parser les définitions de fonctions
+            if (preg_match('/^fn=\((\d+)\)\s+(.+)$/', $line, $matches)) {
+                $currentFunction = [
+                    'name' => $matches[2],
+                    'calls' => 0,
+                    'time' => 0,
+                    'memory' => 0,
+                    'file_id' => null,
+                    'is_user' => false,
+                ];
+                continue;
+            }
+            
+            // Parser les données de temps/mémoire
+            if ($currentFunction && preg_match('/^(\d+)\s+(\d+)\s+(\d+)$/', $line, $matches)) {
+                $currentFunction['time'] += (int)$matches[2];
+                $currentFunction['memory'] += (int)$matches[3];
+                $currentFunction['calls']++;
+                
+                // Déterminer si c'est du code utilisateur
+                if (isset($files[$currentFunction['file_id']])) {
+                    $file = $files[$currentFunction['file_id']];
+                    $currentFunction['is_user'] = !$this->isPsyshCode($file, $currentFunction['name']);
+                }
+                
+                $functions[$currentFunction['name']] = $currentFunction;
+            }
         }
-
-        \usort($files, fn ($a, $b) => \filemtime($b) <=> \filemtime($a));
-
-        return $files[0];
+        
+        return $this->enhanceWithCallGraph($functions);
     }
 
-    private function exportProfile(string $sourceFile, string $targetFile, string $filterLevel)
+    private function isPsyshCode(string $file, string $function): bool
     {
-        if ($filterLevel === 'all') {
-            \copy($sourceFile, $targetFile);
-
-            return;
+        // Vérifier si c'est du code PsySH par le namespace
+        foreach (self::PSYSH_NAMESPACES as $namespace) {
+            if (strpos($function, $namespace) === 0) {
+                return true;
+            }
         }
-
-        $data = $this->parseCachegrindFile($sourceFile);
-        $filteredFunctions = $this->applyFilter($data['functions'], $filterLevel);
-        $this->writeFilteredCachegrindFile($targetFile, $data, $filteredFunctions, $filterLevel);
+        
+        // Vérifier par le fichier
+        if (strpos($file, 'vendor/psy/psysh') !== false) {
+            return true;
+        }
+        
+        return false;
     }
 
-    private function displaySummary(OutputInterface $output, string $profileFile, string $filterLevel)
+    private function enhanceWithCallGraph(array $functions): array
     {
-        $data = $this->parseCachegrindFile($profileFile);
+        // Calculer les temps exclusifs et construire l'arbre d'appels
+        $enhanced = [];
+        $totalTime = array_sum(array_column($functions, 'time'));
+        $totalMemory = array_sum(array_column($functions, 'memory'));
+        
+        foreach ($functions as $name => $data) {
+            $enhanced[$name] = $data + [
+                'time_percent' => $totalTime > 0 ? ($data['time'] / $totalTime) * 100 : 0,
+                'memory_percent' => $totalMemory > 0 ? ($data['memory'] / $totalMemory) * 100 : 0,
+                'time_ms' => $data['time'] / 1000,
+                'memory_kb' => $data['memory'] / 1024,
+            ];
+        }
+        
+        return $enhanced;
+    }
 
-        if (empty($data['functions'])) {
-            $output->writeln('<warning>No profiling data found. The code may have executed too quickly.</warning>');
-
+    private function displayResults(array $data, OutputInterface $output, string $filterLevel, int $threshold): void
+    {
+        // Filtrer selon le niveau
+        $filtered = $this->filterFunctions($data, $filterLevel, $threshold);
+        
+        if (empty($filtered)) {
+            $output->writeln('<comment>No functions exceeded the threshold.</comment>');
             return;
         }
-
-        $filteredFunctions = $this->applyFilter($data['functions'], $filterLevel);
-
-        if (empty($filteredFunctions)) {
-            $output->writeln('<warning>No functions matching the current filter were found in the profile.</warning>');
-
-            return;
-        }
-
-        // Calculate totals from the *filtered* data for accurate percentages
-        $totalTime = \array_sum(\array_column($filteredFunctions, 'time'));
-        $totalMem = \array_sum(\array_column($filteredFunctions, 'mem'));
-
-        $filterDescription = $this->getFilterDescription($filterLevel);
-        $output->writeln("<info>Profiling results ({$filterDescription}):</info>");
-        $output->writeln('');
-
+        
+        // Trier par temps décroissant
+        uasort($filtered, fn($a, $b) => $b['time'] <=> $a['time']);
+        
+        // Afficher le tableau
         $table = new Table($output);
         $table->setHeaders(['Function', 'Calls', 'Time (ms)', 'Time %', 'Memory (KB)', 'Memory %']);
-
-        \usort($filteredFunctions, fn ($a, $b) => $b['time'] <=> $a['time']);
-
-        $functions = \array_slice($filteredFunctions, 0, 20);
-
-        foreach ($functions as $func) {
-            $timePct = $totalTime > 0 ? ($func['time'] / $totalTime) * 100 : 0;
-            $memPct = $totalMem > 0 ? ($func['mem'] / $totalMem) * 100 : 0;
-
+        
+        foreach (array_slice($filtered, 0, 20) as $name => $func) {
             $table->addRow([
-                $this->formatFunctionName($func['name']),
+                $this->formatFunctionName($name),
                 $func['calls'],
-                \sprintf('%.3f', $func['time'] / 1000), // Time is in microseconds
-                \sprintf('%.1f%%', $timePct),
-                \sprintf('%.2f', $func['mem'] / 1024),
-                \sprintf('%.1f%%', $memPct),
+                number_format($func['time_ms'], 3),
+                number_format($func['time_percent'], 1) . '%',
+                number_format($func['memory_kb'], 2),
+                number_format($func['memory_percent'], 1) . '%',
             ]);
         }
-
+        
+        $output->writeln(sprintf(
+            "\n<info>Profiling results (%s):</info>",
+            $filterLevel === 'user' ? 'user code only' : $filterLevel
+        ));
+        
         $table->render();
-        $output->writeln('');
-        $output->writeln(\sprintf(
-            '<info>Total execution (%s): Time: %.3f ms, Memory: %.2f KB</info>',
-            $filterDescription,
-            $totalTime / 1000,
-            $totalMem / 1024
+        
+        // Résumé
+        $output->writeln(sprintf(
+            "\n<comment>Total execution: Time: %.3f ms, Memory: %.2f KB</comment>",
+            array_sum(array_column($filtered, 'time_ms')),
+            array_sum(array_column($filtered, 'memory_kb'))
         ));
     }
 
-    private function parseCachegrindFile(string $filePath): array
+    private function filterFunctions(array $functions, string $filterLevel, int $threshold): array
     {
-        $content = \file_get_contents($filePath);
-        if ($content === false) {
-            return ['summary' => [], 'functions' => []];
-        }
-
-        $lines = \explode("\n", $content);
-        $functions = [];
-        $summary = ['time' => 0, 'mem' => 0];
-        $currentFunc = null;
-        $currentFile = null;
-        $functionNames = [];
-        $fileNames = [];
-
-        foreach ($lines as $line) {
-            $line = \trim($line);
-            if (empty($line)) {
-                continue;
+        return array_filter($functions, function($func) use ($filterLevel, $threshold) {
+            // Filtre par seuil de temps
+            if ($func['time'] < $threshold) {
+                return false;
             }
-
-            // Parse summary line
-            if (\strpos($line, 'summary:') === 0) {
-                $parts = \explode(' ', $line);
-                if (\count($parts) >= 3) {
-                    $summary['time'] = (int) $parts[1];
-                    $summary['mem'] = (int) $parts[2];
-                }
-                continue;
+            
+            // Filtre par niveau
+            switch ($filterLevel) {
+                case 'user':
+                    return $func['is_user'];
+                case 'php':
+                    return $func['is_user'] || !$this->isInternalFunction($func['name']);
+                case 'all':
+                    return true;
             }
-
-            // Parse file line: fl=(1) filename
-            if (\preg_match('/^fl=\((\d+)\)\s+(.+)$/', $line, $matches)) {
-                $fileNames[(int) $matches[1]] = $matches[2];
-                continue;
-            }
-
-            // Parse function line: fn=(1) functionname
-            if (\preg_match('/^fn=\((\d+)\)\s+(.+)$/', $line, $matches)) {
-                $funcId = (int) $matches[1];
-                $funcName = $matches[2];
-                $functionNames[$funcId] = $funcName;
-                
-                if (!isset($functions[$funcName])) {
-                    $functions[$funcName] = [
-                        'id' => $funcId,
-                        'name' => $funcName,
-                        'time' => 0,
-                        'mem' => 0,
-                        'calls' => 1, // Default to 1 call
-                    ];
-                }
-                $currentFunc = $funcName;
-                continue;
-            }
-
-            // Parse cost line: line_number time memory
-            if ($currentFunc && \preg_match('/^(\d+)\s+(\d+)\s+(\d+)$/', $line, $matches)) {
-                $functions[$currentFunc]['time'] += (int) $matches[2];
-                $functions[$currentFunc]['mem'] += (int) $matches[3];
-                continue;
-            }
-
-            // Parse call line: calls=count target_line
-            if (\preg_match('/^calls=(\d+)\s+(\d+)$/', $line, $matches)) {
-                if ($currentFunc) {
-                    $functions[$currentFunc]['calls'] = (int) $matches[1];
-                }
-                continue;
-            }
-        }
-
-        return ['summary' => $summary, 'functions' => \array_values($functions)];
+            
+            return false;
+        });
     }
 
-    private function cleanCode(string $code): string
+    private function isInternalFunction(string $name): bool
     {
-        if (\strpos($code, ';') === false && \strpos($code, '}') === false) {
-            $code = 'return '.$code.';';
-        }
-
-        return $code;
-    }
-
-    private function applyFilter(array $functions, string $filterLevel): array
-    {
-        if ($filterLevel === 'all') {
-            return $functions;
-        }
-
-        $filtered = [];
-        foreach ($functions as $func) {
-            $name = $func['name'];
-
-            if ($this->isPsySHFrameworkFunction($name) || $this->isComposerFunction($name) || $this->isSymfonyFrameworkFunction($name)) {
-                continue;
-            }
-
-            if ($filterLevel === 'user' && $this->isPhpInternalFunction($name)) {
-                continue;
-            }
-
-            $filtered[] = $func;
-        }
-
-        return $filtered;
-    }
-
-    private function getFilterDescription(string $filterLevel): string
-    {
-        return [
-            'all' => 'all functions including framework overhead',
-            'php' => 'user code + PHP internal functions',
-            'user' => 'user code only',
-        ][$filterLevel] ?? 'unknown';
-    }
-
-    private function isPsySHFrameworkFunction(string $name): bool
-    {
-        return \preg_match('/^Psy\\\\/', $name) || \strpos($name, 'psysh') !== false;
-    }
-
-    private function isComposerFunction(string $name): bool
-    {
-        return \strpos($name, 'Composer\\') === 0 || \strpos($name, 'ClassLoader') !== false;
-    }
-
-    private function isSymfonyFrameworkFunction(string $name): bool
-    {
-        return \strpos($name, 'Symfony\\Component\\Console\\') === 0;
-    }
-
-    private function isPhpInternalFunction(string $name): bool
-    {
-        return \strpos($name, 'php::') === 0 || !\preg_match('/(->|::)/', $name) && \function_exists(\explode(' ', $name)[0]);
+        // Fonctions PHP internes n'ont pas de namespace
+        return !strpos($name, '\\') && !strpos($name, '::');
     }
 
     private function formatFunctionName(string $name): string
     {
-        if (\preg_match('/^{closure:(.+):(\d+)-(\d+)}$/', $name, $matches)) {
-            return \sprintf('{closure:%s:%d-%d}', \basename($matches[1]), $matches[2], $matches[3]);
+        // Raccourcir les noms trop longs
+        if (strlen($name) > 60) {
+            // Garder le début et la fin
+            $parts = explode('\\', $name);
+            if (count($parts) > 3) {
+                return $parts[0] . '\\...\\' . end($parts);
+            }
         }
-
-        if (\preg_match('/^(.+)::\{closure\}$/', $name, $matches)) {
-            return $matches[1].'::{closure}';
-        }
-
-        // Shorten very long function names
-        if (\strlen($name) > 70) {
-            return \substr($name, 0, 67).'...';
-        }
-
+        
         return $name;
     }
 
-    private function writeFilteredCachegrindFile(string $filePath, array $data, array $filteredFunctions, string $filterLevel)
+    private function exportProfile(string $source, string $target, OutputInterface $output): void
     {
-        // This function would need a more complex implementation to write a valid,
-        // filtered cachegrind file by reconstructing the call graph.
-        // For now, we just copy the original if filtering is requested for export.
-        \copy($data['source_file'], $filePath);
-    }
-
-    private function canSerialize($value): bool
-    {
-        if ($value instanceof \Closure || \is_resource($value)) {
-            return false;
-        }
-        try {
-            \serialize($value);
-
-            return true;
-        } catch (\Exception $e) {
-            return false;
+        if (copy($source, $target)) {
+            $output->writeln(sprintf('<info>Profile data exported to: %s</info>', $target));
+        } else {
+            $output->writeln('<error>Failed to export profile data</error>');
         }
     }
 }
