@@ -33,6 +33,8 @@ class ProfileCommand extends Command
             ->setName('profile')
             ->setDefinition([
                 new InputOption('out', '', InputOption::VALUE_REQUIRED, 'Path to the output file for the profiling data.'),
+                new InputOption('full', '', InputOption::VALUE_NONE, 'Show full profiling data including PsySH overhead.'),
+                new InputOption('filter', '', InputOption::VALUE_REQUIRED, 'Filter level: user (default), php, all', 'user'),
                 new CodeArgument('code', CodeArgument::REQUIRED, 'The code to profile.'),
             ])
             ->setDescription('Profile a string of PHP code and display the execution summary.')
@@ -43,6 +45,13 @@ Profile a string of PHP code and display the execution summary.
 e.g.
 <return>> profile sleep(1)</return>
 <return>> profile --out=profile.grind file_get_contents('https://example.com')</return>
+<return>> profile --full $a = [1,2,3]; array_map('strtoupper', $a)</return>
+<return>> profile --filter=php json_decode('{"test": true}')</return>
+
+Filter levels:
+- user (default): Shows only user code, excludes framework overhead
+- php: Shows user code + PHP internal functions
+- all: Shows everything including PsySH initialization
 HELP
             );
     }
@@ -61,96 +70,23 @@ HELP
         $code = $this->cleanCode($input->getArgument('code'));
         $outFile = $input->getOption('out');
         $tmpDir = \sys_get_temp_dir();
+        $filterLevel = $input->getOption('full') ? 'all' : $input->getOption('filter');
 
-        // Extract the current context
-        $context = $this->getApplication()->getScopeVariables();
-        $contextCode = '';
-        $excludedVars = [];
-        
-        foreach ($context as $name => $value) {
-            if ($name !== 'this') { // Exclude $this to avoid serialization issues
-                // Ensure variable name starts with $
-                $varName = \str_starts_with($name, '$') ? $name : '$' . $name;
-                
-                // Check if the value can be serialized (exclude closures, resources, etc.)
-                if ($this->canSerialize($value)) {
-                    $contextCode .= \sprintf('%s = \unserialize(%s);', $varName, \var_export(\serialize($value), true));
-                } else {
-                    // For closures and other non-serializable objects, we can't transfer them
-                    $excludedVars[] = \sprintf('%s (%s)', $varName, \gettype($value));
-                    // Add a comment or placeholder to indicate the variable was excluded
-                    $contextCode .= \sprintf('// Variable %s (type: %s) excluded - not serializable\n', $varName, \gettype($value));
-                }
-            }
-        }
-        
-        // Warn user about excluded variables
-        if (!empty($excludedVars)) {
-            $output->writeln('<comment>Note: The following variables are not available in the profiled context:</comment>');
-            foreach ($excludedVars as $var) {
-                $output->writeln('<comment>  - ' . $var . '</comment>');
-            }
-            $output->writeln('');
-        }
+        // Prepare context
+        $shell = $this->getShell();
+        $context = $shell->getScopeVariables();
+        $contextCode = $this->buildContextCode($context, $output);
 
-        // Create a script that sets up context and executes the code
-        $psyshScript = '';
-        
-        // Add context setup
-        foreach ($context as $name => $value) {
-            if ($name !== 'this' && $this->canSerialize($value)) {
-                $varName = \str_starts_with($name, '$') ? $name : '$' . $name;
-                $psyshScript .= sprintf('%s = unserialize(%s);', $varName, var_export(serialize($value), true)) . "\n";
-            }
-        }
-        
-        // Add the code to execute
-        $psyshScript .= $code . "\n";
-        $psyshScript .= "exit\n"; // Exit PsySH after execution
-        
-        // Debug: Show the generated script
-        if (\getenv('PSYSH_DEBUG')) {
-            $output->writeln('<comment>Generated PsySH script:</comment>');
-            $output->writeln($psyshScript);
-        }
+        // Prepare the script to be executed
+        $script = $this->buildScript($contextCode, $code, $filterLevel);
 
-        // First, run the code in a PsySH sub-shell to capture its output (without profiling)
-        $psyshBinary = realpath(__DIR__ . '/../../bin/psysh');
-        $outputProcess = new Process([
-            PHP_BINARY,
-            $psyshBinary,
-        ]);
-        $outputProcess->setInput($psyshScript);
-        $outputProcess->run();
-        
-        // Debug the output process
-        if (\getenv('PSYSH_DEBUG')) {
-            $output->writeln('<comment>Output process exit code: ' . $outputProcess->getExitCode() . '</comment>');
-            $output->writeln('<comment>Output process raw output: "' . addslashes($outputProcess->getOutput()) . '"</comment>');
-            $output->writeln('<comment>Output process error: "' . addslashes($outputProcess->getErrorOutput()) . '"</comment>');
-        }
-        
-        // Show the output from the code
-        $processOutput = trim($outputProcess->getOutput());
-        if (!empty($processOutput)) {
-            $output->writeln('<info>Code output:</info>');
-            $output->writeln($processOutput);
-            $output->writeln('');
-        }
-        
-        // Now run the profiling process with PsySH
-        $process = new Process([
-            PHP_BINARY,
-            '-d', 'xdebug.mode=profile',
-            '-d', 'xdebug.start_with_request=yes',
-            '-d', 'xdebug.output_dir='.$tmpDir,
-            $psyshBinary,
-        ]);
-        $process->setInput($psyshScript);
+        // First, run the code in a sub-shell to capture its output (without profiling)
+        $this->runOutputProcess($script, $output);
 
-        $process->run();
+        // Now, run the profiling process
+        $process = $this->runProfilingProcess($script, $tmpDir, $filterLevel);
 
-        if (!($process->isSuccessful())) {
+        if (!$process->isSuccessful()) {
             $output->writeln('<error>Failed to execute profiling process.</error>');
             $output->writeln($process->getErrorOutput());
 
@@ -164,15 +100,90 @@ HELP
             return 1;
         }
 
+        // Handle the output
         if ($outFile) {
-            \rename($profileFile, $outFile);
+            $this->exportProfile($profileFile, $outFile, $filterLevel);
             $output->writeln(\sprintf('<info>Profiling data saved to: %s</info>', $outFile));
         } else {
-            $this->displaySummary($output, $profileFile);
-            \unlink($profileFile);
+            $this->displaySummary($output, $profileFile, $filterLevel);
         }
 
+        \unlink($profileFile);
+
         return 0;
+    }
+
+    private function buildContextCode(array $context, OutputInterface $output): string
+    {
+        $contextCode = '';
+        $excludedVars = [];
+
+        foreach ($context as $name => $value) {
+            if ($name === '_') { // Don't re-inject the last result
+                continue;
+            }
+
+            if ($name !== 'this' && $this->canSerialize($value)) {
+                $varName = (\strpos($name, '$') === 0) ? $name : '$'.$name;
+                $contextCode .= \sprintf('%s = \unserialize(%s);', $varName, \var_export(\serialize($value), true))."\n";
+            } else {
+                $excludedVars[] = \sprintf('%s (%s)', $name, \gettype($value));
+            }
+        }
+
+        if (!empty($excludedVars)) {
+            $output->writeln('<comment>Note: The following variables are not available in the profiled context:</comment>');
+            foreach ($excludedVars as $var) {
+                $output->writeln('<comment>  - '.$var.'</comment>');
+            }
+            $output->writeln('');
+        }
+
+        return $contextCode;
+    }
+
+    private function buildScript(string $contextCode, string $userCode, string $filterLevel): string
+    {
+        $script = $contextCode;
+        $script .= $userCode."\n";
+
+        return $script;
+    }
+
+    private function runOutputProcess(string $script, OutputInterface $output)
+    {
+        $psyshBinary = \realpath(__DIR__.'/../../bin/psysh');
+        $process = new Process([PHP_BINARY, $psyshBinary]);
+        $process->setInput($script."\nexit\n");
+        $process->run();
+
+        $processOutput = \trim($process->getOutput());
+        if (!empty($processOutput)) {
+            $output->writeln('<info>Code output:</info>');
+            $output->writeln($processOutput);
+            $output->writeln('');
+        }
+    }
+
+    private function runProfilingProcess(string $script, string $tmpDir, string $filterLevel): Process
+    {
+        $psyshBinary = \realpath(__DIR__.'/../../bin/psysh');
+        $processArgs = [PHP_BINARY];
+
+        // Always enable profiling with start_with_request=yes since Xdebug 3.x removed manual control functions
+        $processArgs = \array_merge($processArgs, [
+            '-d', 'xdebug.mode=profile',
+            '-d', 'xdebug.start_with_request=yes',
+            '-d', 'xdebug.output_dir='.$tmpDir,
+        ]);
+
+        $processArgs[] = $psyshBinary;
+
+        $process = new Process($processArgs);
+        $process->setInput($script."\nexit\n");
+        $process->run();
+
+        return $process;
     }
 
     private function findLatestProfileFile(string $dir): ?string
@@ -182,147 +193,252 @@ HELP
             return null;
         }
 
-        \usort($files, function ($a, $b) {
-            return \filemtime($b) <=> \filemtime($a);
-        });
+        \usort($files, fn ($a, $b) => \filemtime($b) <=> \filemtime($a));
 
         return $files[0];
     }
 
-    private function displaySummary(OutputInterface $output, string $profileFile)
+    private function exportProfile(string $sourceFile, string $targetFile, string $filterLevel)
     {
-        $data = $this->parseCachegrindFile($profileFile);
-
-        if (empty($data['functions'])) {
-            $output->writeln('<warning>No profiling data found in the output file.</warning>');
+        if ($filterLevel === 'all') {
+            \copy($sourceFile, $targetFile);
 
             return;
         }
 
-        $timeUnit = $data['summary']['time_unit'] ?? 1; // Default to 1 ns
+        $data = $this->parseCachegrindFile($sourceFile);
+        $filteredFunctions = $this->applyFilter($data['functions'], $filterLevel);
+        $this->writeFilteredCachegrindFile($targetFile, $data, $filteredFunctions, $filterLevel);
+    }
 
-        // Calculate totals from function data for better accuracy
-        $totalTime = 0;
-        $totalMem = 0;
-        foreach ($data['functions'] as $func) {
-            $totalTime += $func['time'];
-            $totalMem += $func['memory'];
+    private function displaySummary(OutputInterface $output, string $profileFile, string $filterLevel)
+    {
+        $data = $this->parseCachegrindFile($profileFile);
+
+        if (empty($data['functions'])) {
+            $output->writeln('<warning>No profiling data found. The code may have executed too quickly.</warning>');
+
+            return;
         }
 
-        $totalTimeMs = ($totalTime * $timeUnit) / 1000000;
-        $totalMemKb = $totalMem / 1024;
+        $filteredFunctions = $this->applyFilter($data['functions'], $filterLevel);
 
-        $output->writeln('<info>Profiling results:</info>');
-        $output->writeln(\sprintf(
-            '<comment>Note: Total time includes PsySH overhead. Focus on relative percentages for performance analysis.</comment>'
-        ));
+        if (empty($filteredFunctions)) {
+            $output->writeln('<warning>No functions matching the current filter were found in the profile.</warning>');
+
+            return;
+        }
+
+        // Calculate totals from the *filtered* data for accurate percentages
+        $totalTime = \array_sum(\array_column($filteredFunctions, 'time'));
+        $totalMem = \array_sum(\array_column($filteredFunctions, 'mem'));
+
+        $filterDescription = $this->getFilterDescription($filterLevel);
+        $output->writeln("<info>Profiling results ({$filterDescription}):</info>");
         $output->writeln('');
 
         $table = new Table($output);
         $table->setHeaders(['Function', 'Calls', 'Time (ms)', 'Time %', 'Memory (KB)', 'Memory %']);
 
-        \usort($data['functions'], function ($a, $b) {
-            return $b['time'] <=> $a['time'];
-        });
+        \usort($filteredFunctions, fn ($a, $b) => $b['time'] <=> $a['time']);
 
-        $functions = \array_slice($data['functions'], 0, 20); // Show top 20
+        $functions = \array_slice($filteredFunctions, 0, 20);
 
         foreach ($functions as $func) {
-            $timeMs = ($func['time'] * $timeUnit) / 1000000;
-            $memKb = $func['memory'] / 1024;
-            $timePct = $totalTimeMs > 0 ? ($timeMs / $totalTimeMs) * 100 : 0;
-            $memPct = $totalMemKb > 0 ? ($memKb / $totalMemKb) * 100 : 0;
+            $timePct = $totalTime > 0 ? ($func['time'] / $totalTime) * 100 : 0;
+            $memPct = $totalMem > 0 ? ($func['mem'] / $totalMem) * 100 : 0;
 
             $table->addRow([
-                $func['name'],
+                $this->formatFunctionName($func['name']),
                 $func['calls'],
-                \sprintf('%.2f', $timeMs),
+                \sprintf('%.3f', $func['time'] / 1000), // Time is in microseconds
                 \sprintf('%.1f%%', $timePct),
-                \sprintf('%.2f', $memKb),
+                \sprintf('%.2f', $func['mem'] / 1024),
                 \sprintf('%.1f%%', $memPct),
             ]);
         }
 
         $table->render();
-        
         $output->writeln('');
         $output->writeln(\sprintf(
-            '<info>Total (top 20): Time: %.2f ms, Memory: %.2f KB</info>',
-            $totalTimeMs,
-            $totalMemKb
+            '<info>Total execution (%s): Time: %.3f ms, Memory: %.2f KB</info>',
+            $filterDescription,
+            $totalTime / 1000,
+            $totalMem / 1024
         ));
     }
 
     private function parseCachegrindFile(string $filePath): array
     {
-        $file = \fopen($filePath, 'r');
-        if (!$file) {
+        $content = \file_get_contents($filePath);
+        if ($content === false) {
             return ['summary' => [], 'functions' => []];
         }
 
-        $summary = [];
+        $lines = \explode("\n", $content);
         $functions = [];
+        $summary = ['time' => 0, 'mem' => 0];
         $currentFunc = null;
-        $timeUnit = 1; // Default to 1 ns
+        $currentFile = null;
+        $functionNames = [];
+        $fileNames = [];
 
-        while (($line = \fgets($file)) !== false) {
+        foreach ($lines as $line) {
             $line = \trim($line);
-
-            if (empty($line) || $line[0] === '#') {
+            if (empty($line)) {
                 continue;
             }
 
-            if (\preg_match('/^summary:\s+(\d+)\s+(\d+)/', $line, $matches)) {
-                $summary = ['time' => (int) $matches[1], 'memory' => (int) $matches[2]];
-            } elseif (\preg_match('/^events:\s*Time\s*\((\d+)ns\)/', $line, $matches)) {
-                $timeUnit = (int) $matches[1];
-            } elseif (\preg_match('/^fn=(.+)/', $line, $matches)) {
-                $currentFunc = $matches[1];
-                if (!isset($functions[$currentFunc])) {
-                    $functions[$currentFunc] = ['name' => $currentFunc, 'calls' => 0, 'time' => 0, 'memory' => 0];
+            // Parse summary line
+            if (\strpos($line, 'summary:') === 0) {
+                $parts = \explode(' ', $line);
+                if (\count($parts) >= 3) {
+                    $summary['time'] = (int) $parts[1];
+                    $summary['mem'] = (int) $parts[2];
                 }
-                $functions[$currentFunc]['calls']++; // Each fn= is one call context.
-            } elseif ($currentFunc && \preg_match('/^\d+\s+(\d+)\s+(\d+)$/', $line, $matches)) {
-                // This is a self-cost line: line_number, time, memory
-                $functions[$currentFunc]['time'] += (int) $matches[1];
-                $functions[$currentFunc]['memory'] += (int) $matches[2];
+                continue;
+            }
+
+            // Parse file line: fl=(1) filename
+            if (\preg_match('/^fl=\((\d+)\)\s+(.+)$/', $line, $matches)) {
+                $fileNames[(int) $matches[1]] = $matches[2];
+                continue;
+            }
+
+            // Parse function line: fn=(1) functionname
+            if (\preg_match('/^fn=\((\d+)\)\s+(.+)$/', $line, $matches)) {
+                $funcId = (int) $matches[1];
+                $funcName = $matches[2];
+                $functionNames[$funcId] = $funcName;
+                
+                if (!isset($functions[$funcName])) {
+                    $functions[$funcName] = [
+                        'id' => $funcId,
+                        'name' => $funcName,
+                        'time' => 0,
+                        'mem' => 0,
+                        'calls' => 1, // Default to 1 call
+                    ];
+                }
+                $currentFunc = $funcName;
+                continue;
+            }
+
+            // Parse cost line: line_number time memory
+            if ($currentFunc && \preg_match('/^(\d+)\s+(\d+)\s+(\d+)$/', $line, $matches)) {
+                $functions[$currentFunc]['time'] += (int) $matches[2];
+                $functions[$currentFunc]['mem'] += (int) $matches[3];
+                continue;
+            }
+
+            // Parse call line: calls=count target_line
+            if (\preg_match('/^calls=(\d+)\s+(\d+)$/', $line, $matches)) {
+                if ($currentFunc) {
+                    $functions[$currentFunc]['calls'] = (int) $matches[1];
+                }
+                continue;
             }
         }
-
-        \fclose($file);
-
-        $summary['time_unit'] = $timeUnit;
 
         return ['summary' => $summary, 'functions' => \array_values($functions)];
     }
 
     private function cleanCode(string $code): string
     {
-        // A bit of a hack, but it works for now.
-        if (\strpos($code, ';') === false) {
+        if (\strpos($code, ';') === false && \strpos($code, '}') === false) {
             $code = 'return '.$code.';';
         }
 
         return $code;
     }
 
-    /**
-     * Check if a value can be safely serialized.
-     */
+    private function applyFilter(array $functions, string $filterLevel): array
+    {
+        if ($filterLevel === 'all') {
+            return $functions;
+        }
+
+        $filtered = [];
+        foreach ($functions as $func) {
+            $name = $func['name'];
+
+            if ($this->isPsySHFrameworkFunction($name) || $this->isComposerFunction($name) || $this->isSymfonyFrameworkFunction($name)) {
+                continue;
+            }
+
+            if ($filterLevel === 'user' && $this->isPhpInternalFunction($name)) {
+                continue;
+            }
+
+            $filtered[] = $func;
+        }
+
+        return $filtered;
+    }
+
+    private function getFilterDescription(string $filterLevel): string
+    {
+        return [
+            'all' => 'all functions including framework overhead',
+            'php' => 'user code + PHP internal functions',
+            'user' => 'user code only',
+        ][$filterLevel] ?? 'unknown';
+    }
+
+    private function isPsySHFrameworkFunction(string $name): bool
+    {
+        return \preg_match('/^Psy\\\\/', $name) || \strpos($name, 'psysh') !== false;
+    }
+
+    private function isComposerFunction(string $name): bool
+    {
+        return \strpos($name, 'Composer\\') === 0 || \strpos($name, 'ClassLoader') !== false;
+    }
+
+    private function isSymfonyFrameworkFunction(string $name): bool
+    {
+        return \strpos($name, 'Symfony\\Component\\Console\\') === 0;
+    }
+
+    private function isPhpInternalFunction(string $name): bool
+    {
+        return \strpos($name, 'php::') === 0 || !\preg_match('/(->|::)/', $name) && \function_exists(\explode(' ', $name)[0]);
+    }
+
+    private function formatFunctionName(string $name): string
+    {
+        if (\preg_match('/^{closure:(.+):(\d+)-(\d+)}$/', $name, $matches)) {
+            return \sprintf('{closure:%s:%d-%d}', \basename($matches[1]), $matches[2], $matches[3]);
+        }
+
+        if (\preg_match('/^(.+)::\{closure\}$/', $name, $matches)) {
+            return $matches[1].'::{closure}';
+        }
+
+        // Shorten very long function names
+        if (\strlen($name) > 70) {
+            return \substr($name, 0, 67).'...';
+        }
+
+        return $name;
+    }
+
+    private function writeFilteredCachegrindFile(string $filePath, array $data, array $filteredFunctions, string $filterLevel)
+    {
+        // This function would need a more complex implementation to write a valid,
+        // filtered cachegrind file by reconstructing the call graph.
+        // For now, we just copy the original if filtering is requested for export.
+        \copy($data['source_file'], $filePath);
+    }
+
     private function canSerialize($value): bool
     {
-        // Check for common non-serializable types
-        if (\is_resource($value)) {
+        if ($value instanceof \Closure || \is_resource($value)) {
             return false;
         }
-
-        if ($value instanceof \Closure) {
-            return false;
-        }
-
-        // Try to serialize and catch any exceptions
         try {
             \serialize($value);
+
             return true;
         } catch (\Exception $e) {
             return false;

@@ -37,7 +37,7 @@ class ProfileCommandTest extends \Psy\Test\TestCase
         ]);
 
         $output = $tester->getDisplay();
-        $this->assertStringContainsString('Total Time:', $output);
+        $this->assertStringContainsString('Total execution', $output);
         $this->assertStringContainsString('Memory:', $output);
         $this->assertStringContainsString('Function', $output);
         $this->assertStringContainsString('Calls', $output);
@@ -61,13 +61,11 @@ class ProfileCommandTest extends \Psy\Test\TestCase
         ]);
 
         $output = $tester->getDisplay();
-        $this->assertStringContainsString('Total Time:', $output);
+        $this->assertStringContainsString('Total execution', $output);
         $this->assertStringContainsString('Memory:', $output);
         $this->assertStringContainsString('Function', $output);
         $this->assertStringContainsString('Calls', $output);
         $this->assertStringContainsString('Time (ms)', $output);
         $this->assertStringContainsString('Memory (KB)', $output);
     }
-}
-}
 }
