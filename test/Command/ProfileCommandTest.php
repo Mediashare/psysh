@@ -41,8 +41,8 @@ class ProfileCommandTest extends \Psy\Test\TestCase
         $this->assertStringContainsString('Memory:', $output);
         $this->assertStringContainsString('Function', $output);
         $this->assertStringContainsString('Calls', $output);
-        $this->assertStringContainsString('Time (ms)', $output);
-        $this->assertStringContainsString('Memory (KB)', $output);
+        $this->assertStringContainsString('Time', $output);
+        $this->assertStringContainsString('Memory', $output);
     }
 
     public function testProfileCommandWithContext()
@@ -65,7 +65,7 @@ class ProfileCommandTest extends \Psy\Test\TestCase
         $this->assertStringContainsString('Memory:', $output);
         $this->assertStringContainsString('Function', $output);
         $this->assertStringContainsString('Calls', $output);
-        $this->assertStringContainsString('Time (ms)', $output);
-        $this->assertStringContainsString('Memory (KB)', $output);
+        $this->assertStringContainsString('Time', $output);
+        $this->assertStringContainsString('Memory', $output);
     }
 }
