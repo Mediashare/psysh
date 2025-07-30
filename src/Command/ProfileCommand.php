@@ -42,6 +42,7 @@ class ProfileCommand extends Command
                 new InputOption('show-params', '', InputOption::VALUE_NONE, 'Show function parameters in profiling results.'),
                 new InputOption('full-namespaces', '', InputOption::VALUE_NONE, 'Show complete namespaces without truncation.'),
                 new InputOption('trace-all', '', InputOption::VALUE_NONE, 'Use Xdebug tracing to capture ALL function calls (including strlen, etc.)'),
+                new InputOption('debug', '', InputOption::VALUE_NONE, 'Show debug information about context reconstruction'),
                 new CodeArgument('code', CodeArgument::REQUIRED, 'The code to profile.'),
             ])
             ->setDescription('Profile a string of PHP code and display the execution summary.')
@@ -83,13 +84,14 @@ $outFile = $input->getOption('out');
         $showParams = $input->getOption('show-params');
         $fullNamespaces = $input->getOption('full-namespaces');
         $traceAll = $input->getOption('trace-all');
+        $debug = $input->getOption('debug');
 
         // Exécuter le code avec profilage isolé
         try {
             if ($traceAll) {
-                $result = $this->executeWithXdebugTracing($code, $filterLevel, $output);
+                $result = $this->executeWithXdebugTracing($code, $filterLevel, $output, $debug);
             } else {
-                $result = $this->executeWithProfiling($code, $filterLevel, $output);
+                $result = $this->executeWithProfiling($code, $filterLevel, $output, $debug);
             }
             $success = $result['success'];
             $profile_data = $result['data'];
@@ -115,10 +117,10 @@ $outFile = $input->getOption('out');
         return $success ? 0 : 1;
     }
 
-    private function prepareCodeWithContext(string $code): string
+    private function prepareCodeWithContext(string $code, bool $debug = false): string
     {
         $shell = $this->getShell();
-        $context = $this->serializeContext($shell);
+        $context = $this->serializeContext($shell, $debug);
         
         // S'assurer que le code se termine par un point-virgule
         $code = rtrim($code);
@@ -160,10 +162,10 @@ EOPHP;
         return $fullCode;
     }
 
-    private function prepareCodeWithXdebugTracing(string $code): string
+    private function prepareCodeWithXdebugTracing(string $code, bool $debug = false): string
     {
         $shell = $this->getShell();
-        $context = $this->serializeContext($shell);
+        $context = $this->serializeContext($shell, $debug);
         
         // S'assurer que le code se termine par un point-virgule
         $code = rtrim($code);
@@ -198,10 +200,15 @@ EOFPHP;
         return $fullCode;
     }
 
-    private function serializeContext($shell): string
+    private function serializeContext($shell, bool $debug = false): string
     {
         $context = [];
         $context[] = '// -- Contexte PsySH Reconstruit --';
+        
+        if ($debug) {
+            $context[] = '// Mode DEBUG activé';
+            $context[] = 'echo "[DEBUG] Reconstruction du contexte..." . PHP_EOL;';
+        }
 
         // 1. Capturer tous les autoloaders pertinents
         $this->captureAutoloaders($context);
@@ -335,21 +342,10 @@ EOFPHP;
             }
 
             if ($value instanceof \Closure) {
-                // Vérifier si opis/closure est disponible
-                if (function_exists('\Opis\Closure\serialize')) {
-                    try {
-                        $serialized = \Opis\Closure\serialize($value);
-                        $context[] = sprintf(
-                            '$%s = \Opis\Closure\unserialize(%s);',
-                            $name,
-                            var_export($serialized, true)
-                        );
-                    } catch (\Exception $e) {
-                        $context[] = sprintf("// Closure \$%s could not be serialized: %s", $name, $e->getMessage());
-                    }
-                } else {
-                    $context[] = sprintf("// Closure \$%s could not be exported: opis/closure not available", $name);
-                }
+                // Solution 1: Ignorer complètement les closures
+                // Les closures seront recréées via l'historique du code exécuté
+                $context[] = sprintf("// Closure \$%s ignored - will be reconstructed from executed code history", $name);
+                continue;
             } elseif (is_object($value)) {
                 $serialized = @serialize($value);
                 if ($serialized !== false) {
@@ -459,6 +455,36 @@ EOFPHP;
         return false;
     }
 
+    
+    /**
+     * Vérifie si une closure peut être sérialisée en toute sécurité
+     */
+    private function isSerializableClosure(\Closure $closure): bool
+    {
+        try {
+            $reflector = new \ReflectionFunction($closure);
+            
+            // Éviter les closures internes
+            if ($reflector->isInternal()) {
+                return false;
+            }
+            
+            // Éviter les closures liées à des classes (peuvent causer des problèmes)
+            if ($reflector->getClosureScopeClass()) {
+                return false;
+            }
+            
+            // Éviter les closures qui utilisent $this
+            if ($reflector->getClosureThis()) {
+                return false;
+            }
+            
+            return true;
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
     private function captureShellDefinedClasses(): string
     {
         $classDefinitions = [];
@@ -552,10 +578,15 @@ EOFPHP;
         }
     }
 
-    private function executeWithProfiling(string $code, string $filterLevel, OutputInterface $output): array
+    private function executeWithProfiling(string $code, string $filterLevel, OutputInterface $output, bool $debug = false): array
     {
         // Préparer le code avec contexte et XHProf
-        $fullCode = $this->prepareCodeWithContext($code);
+        $fullCode = $this->prepareCodeWithContext($code, $debug);
+        
+        if ($debug) {
+            $output->writeln('<comment>[DEBUG] Code généré pour le profilage:</comment>');
+            $output->writeln('<info>' . substr($fullCode, 0, 500) . '...</info>');
+        }
         
         // Exécuter avec PHP -r pour éviter le bruit de PsySH
         $process = new \Symfony\Component\Process\Process([
@@ -599,12 +630,12 @@ EOFPHP;
         ];
     }
 
-    private function executeWithXdebugTracing(string $code, string $filterLevel, OutputInterface $output): array
+    private function executeWithXdebugTracing(string $code, string $filterLevel, OutputInterface $output, bool $debug = false): array
     {
         $tmpDir = sys_get_temp_dir();
         
         // Préparer le code avec contexte pour Xdebug tracing
-        $fullCode = $this->prepareCodeWithXdebugTracing($code);
+        $fullCode = $this->prepareCodeWithXdebugTracing($code, $debug);
         
         // Exécuter avec Xdebug tracing activé
         $process = new \Symfony\Component\Process\Process([
