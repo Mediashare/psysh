@@ -133,6 +133,9 @@ $outFile = $input->getOption('out');
 // Charger opis/closure si disponible
 if (file_exists(__DIR__ . '/vendor/autoload.php')) {
     require_once __DIR__ . '/vendor/autoload.php';
+    if (!in_array('closure', stream_get_wrappers())) {
+        stream_wrapper_register('closure', 'Opis\Closure\CodeStream');
+    }
 }
 
 // Vérifier que XHProf est disponible
@@ -178,6 +181,9 @@ EOPHP;
 // Charger opis/closure si disponible
 if (file_exists(__DIR__ . '/vendor/autoload.php')) {
     require_once __DIR__ . '/vendor/autoload.php';
+    if (!in_array('closure', stream_get_wrappers())) {
+        stream_wrapper_register('closure', 'Opis\Closure\CodeStream');
+    }
 }
 
 // Restaurer le contexte du shell
@@ -239,22 +245,6 @@ EOFPHP;
         $context[] = '// -- Fin du Contexte Reconstruit --';
 
         return implode("\n", array_filter($context));
-    }
-    
-    
-    private function isSimpleArray($array): bool
-    {
-        if (!is_array($array)) {
-            return false;
-        }
-        
-        foreach ($array as $value) {
-            if (!is_scalar($value) && !is_null($value)) {
-                return false;
-            }
-        }
-        
-        return true;
     }
     
     private function captureAutoloaders(array &$context): void
@@ -342,10 +332,27 @@ EOFPHP;
             }
 
             if ($value instanceof \Closure) {
-                // Solution 1: Ignorer complètement les closures
-                // Les closures seront recréées via l'historique du code exécuté
-                $context[] = sprintf("// Closure \$%s ignored - will be reconstructed from executed code history", $name);
-                continue;
+                $reflector = new \ReflectionFunction($value);
+                if ($reflector->getFileName() && str_contains($reflector->getFileName(), 'eval()\'d code')) {
+                    $context[] = sprintf("// Closure \$%s ignored (defined in eval()\'d code)", $name);
+                    continue;
+                }
+
+                // Vérifier si opis/closure est disponible et si la closure est sérialisable
+                if (function_exists('\Opis\Closure\serialize') && $this->isSerializableClosure($value)) {
+                    try {
+                        $serialized = \Opis\Closure\serialize($value);
+                        $context[] = sprintf(
+                            '$%s = \Opis\Closure\unserialize(%s);',
+                            $name,
+                            var_export($serialized, true)
+                        );
+                    } catch (\Exception $e) {
+                        $context[] = sprintf("// Closure \$%s could not be serialized: %s", $name, $e->getMessage());
+                    }
+                } else {
+                    $context[] = sprintf("// Closure \$%s ignored - not serializable or opis/closure not available", $name);
+                }
             } elseif (is_object($value)) {
                 $serialized = @serialize($value);
                 if ($serialized !== false) {
@@ -476,6 +483,11 @@ EOFPHP;
             
             // Éviter les closures qui utilisent $this
             if ($reflector->getClosureThis()) {
+                return false;
+            }
+
+            // Éviter les closures définies dans le code évalué (eval()\'d code)
+            if ($reflector->getFileName() && str_contains($reflector->getFileName(), 'eval()\'d code')) {
                 return false;
             }
             

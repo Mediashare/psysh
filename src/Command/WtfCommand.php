@@ -50,6 +50,7 @@ class WtfCommand extends TraceCommand implements ContextAware
             ->setDefinition([
                 new InputArgument('incredulity', InputArgument::OPTIONAL | InputArgument::IS_ARRAY, 'Number of lines to show.'),
                 new InputOption('all', 'a', InputOption::VALUE_NONE, 'Show entire backtrace.'),
+                new InputOption('show-params', '', InputOption::VALUE_NONE, 'Show function parameters in profiling results.'),
 
                 $grep,
                 $insensitive,
@@ -103,7 +104,7 @@ HELP
                 $showLines = \PHP_INT_MAX;
             }
 
-            $trace = $this->getBacktrace($exception, $showLines);
+            $trace = $this->getBacktrace($exception, $showLines, true, $input->getOption('show-params'));
             $moreLines = $traceCount - \count($trace);
 
             $output->writeln($this->getShell()->formatException($exception));

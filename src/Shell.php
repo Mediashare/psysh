@@ -953,7 +953,7 @@ class Shell extends Application
 
         // Special handling for commands with CodeArgument to allow multi-line input
         if ($shellInput->hasCodeArgument()) {
-            $shellInput = $this->handleMultiLineCodeArgument($shellInput);
+            $shellInput = $this->handleMultiLineCodeArgument($shellInput, $command, $input);
         }
 
         if (!$shellInput->hasParameterOption(['--help', '-h'])) {
@@ -982,9 +982,8 @@ class Shell extends Application
         return $helpCommand->run(new StringInput(''), $this->output);
     }
 
-    private function handleMultiLineCodeArgument(ShellInput $input): ShellInput
+    private function handleMultiLineCodeArgument(ShellInput $input, BaseCommand $command, string $originalInput): ShellInput
     {
-        $command = $this->getCommand((string) $input);
         $definition = $command->getDefinition();
         $codeArgumentName = null;
 
@@ -999,15 +998,27 @@ class Shell extends Application
             return $input;
         }
 
-        $rawCode = $input->getArgument($codeArgumentName);
-
-        // If the initial code is empty, we don't need to ask for more input.
-        if (empty(trim($rawCode))) {
-            return $input;
+        // Extract the code part from the original input
+        // First, remove the command name
+        $commandName = $command->getName();
+        $codeStartPos = strpos($originalInput, $commandName);
+        if ($codeStartPos !== false) {
+            $afterCommand = substr($originalInput, $codeStartPos + strlen($commandName));
+            // Trim any leading whitespace
+            $afterCommand = ltrim($afterCommand);
+            
+            // Now strip any options (--option or -o) from the beginning
+            // This regex handles options like --debug, -d, --option=value
+            $code = preg_replace('/^((-{1,2}[a-zA-Z0-9-]+(=[^\s]+)?\s+)*)+/', '', $afterCommand);
+        } else {
+            // Fallback to the raw code from input
+            $code = $input->getArgument($codeArgumentName);
         }
 
-        // Strip the command name from the beginning of the code.
-        $code = preg_replace('/^'.preg_quote($command->getName(), '/').'\s*/', '', $rawCode, 1);
+        // If the initial code is empty, we don't need to ask for more input.
+        if (empty(trim($code))) {
+            return $input;
+        }
 
         // For non-interactive mode, we can't ask for more input.
         if ($this->nonInteractive) {

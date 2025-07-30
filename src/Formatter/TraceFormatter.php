@@ -29,7 +29,7 @@ class TraceFormatter
      *
      * @return string[] Formatted stacktrace lines
      */
-    public static function formatTrace(\Throwable $throwable, ?FilterOptions $filter = null, ?int $count = null, bool $includePsy = true): array
+    public static function formatTrace(\Throwable $throwable, ?FilterOptions $filter = null, ?int $count = null, bool $includePsy = true, bool $showParams = false): array
     {
         if ($cwd = \getcwd()) {
             $cwd = \rtrim($cwd, \DIRECTORY_SEPARATOR).\DIRECTORY_SEPARATOR;
@@ -82,15 +82,39 @@ class TraceFormatter
             }
 
             $lines[] = \sprintf(
-                ' <class>%s</class>%s%s() at <info>%s:%s</info>',
+                ' <class>%s</class>%s%s%s at <info>%s:%s</info>',
                 OutputFormatter::escape($class),
                 OutputFormatter::escape($type),
                 OutputFormatter::escape($function),
+                $showParams ? '(' . self::formatArgs($trace[$i]['args']) . ')' : '()',
                 OutputFormatter::escape($file),
                 OutputFormatter::escape($line)
             );
         }
 
         return $lines;
+    }
+
+    private static function formatArgs(array $args): string
+    {
+        $formattedArgs = [];
+        foreach ($args as $arg) {
+            if (\is_array($arg)) {
+                $formattedArgs[] = 'array';
+            } elseif (\is_object($arg)) {
+                $formattedArgs[] = 'object(' . \get_class($arg) . ')';
+            } elseif (\is_resource($arg)) {
+                $formattedArgs[] = 'resource';
+            } elseif (\is_string($arg)) {
+                $formattedArgs[] = '\'' . OutputFormatter::escape($arg) . '\'';
+            } elseif (\is_null($arg)) {
+                $formattedArgs[] = 'null';
+            } elseif (\is_bool($arg)) {
+                $formattedArgs[] = $arg ? 'true' : 'false';
+            } else {
+                $formattedArgs[] = (string) $arg;
+            }
+        }
+        return \implode(', ', $formattedArgs);
     }
 }
