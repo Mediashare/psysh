@@ -17,15 +17,21 @@ PsySH is a runtime developer console, interactive debugger and REPL for PHP. It'
 
 ### Building and Testing
 ```bash
-# Install dependencies
+# Install dependencies (sets up vendor-bin structure)
 composer install
 
-# Run tests
+# Run all tests
 make test
 # or alternatively
 vendor/bin/phpunit
 
-# Run static analysis
+# Run individual test file
+vendor/bin/phpunit test/Command/ProfileCommandTest.php
+
+# Run specific test method
+vendor/bin/phpunit --filter testSpecificMethod test/SomeTest.php
+
+# Run static analysis (PHPStan level 1)
 make phpstan
 # or alternatively  
 vendor/bin/phpstan --memory-limit=1G analyse
@@ -33,23 +39,16 @@ vendor/bin/phpstan --memory-limit=1G analyse
 # Build PHAR executable
 make build
 
-# Clean build artifacts
+# Clean all build artifacts and vendor-bin directories
 make clean
 ```
 
-### Individual Test Execution
-```bash
-# Run specific test file
-vendor/bin/phpunit test/Command/ProfileCommandTest.php
-
-# Run specific test method
-vendor/bin/phpunit --filter testSpecificMethod test/SomeTest.php
-```
-
 ### Code Quality
-- PHPStan is configured at level 1 (phpstan.neon.dist)
-- Tests are located in the `test/` directory
+- PHPStan is configured at level 1 (phpstan.neon.dist) with baseline and ignore files
+- Uses bamarni/composer-bin-plugin for isolated dev dependencies in vendor-bin/
+- Tests are located in the `test/` directory and mirror `src/` structure
 - Code follows PSR-4 autoloading with `Psy\` namespace
+- PHP 7.4+ compatibility required (see composer.json constraints)
 
 ## Architecture Overview
 
@@ -109,11 +108,19 @@ class MyCommand extends Command
 - `TestCase` and `ParserTestCase` for general testing utilities
 - Command tests should extend appropriate base classes and test command behavior
 
-### Current Development Focus
+### Development Workflow Notes
 
-The codebase is currently on the `xdebug` branch, working on integrating Xdebug profiling capabilities. Key files being modified:
-- `src/Command/ProfileCommand.php` - New profiling command
-- `src/Command/StackCommand.php` - New stack analysis command  
-- Related test files for the new functionality
+**Branch Management:**
+- Main development branch: `main` 
+- Feature branch for Xdebug integration: `xdebug`
+- Current modified files: `src/Command/ProfileCommand.php`, `src/Shell.php`
 
-The XDEBUG.md file contains detailed technical specifications for the Xdebug integration, particularly around interactive code profiling using isolated PHP processes.
+**Dependencies and Build Tools:**
+- Uses `composer-bin-plugin` for isolated dev dependencies in `vendor-bin/`
+- Box PHAR compiler for building distributable executables
+- PHPStan baseline and ignore files located in `vendor-bin/phpstan/`
+
+**Process Isolation Pattern:**
+- Code execution uses `Symfony\Component\Process\Process` for isolation
+- Critical for new features like Xdebug profiling to avoid affecting main shell
+- See XDEBUG.md for detailed specs on isolated process profiling implementation

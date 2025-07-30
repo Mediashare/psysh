@@ -982,13 +982,8 @@ class Shell extends Application
 
     private function handleMultiLineCodeArgument(ShellInput $input): ShellInput
     {
-        // Only handle multi-line code arguments in interactive mode
-        // For non-interactive mode, we assume the input is complete and don't ask for more
-        if ($this->nonInteractive) {
-            return $input;
-        }
-
-        $definition = $this->getCommand($input->__toString())->getDefinition();
+        $command = $this->getCommand((string) $input);
+        $definition = $command->getDefinition();
         $codeArgumentName = null;
 
         foreach ($definition->getArguments() as $argument) {
@@ -1002,7 +997,6 @@ class Shell extends Application
             return $input;
         }
 
-        $commandName = $this->getCommand($input->__toString())->getName();
         $rawCode = $input->getArgument($codeArgumentName);
 
         // If the initial code is empty, we don't need to ask for more input.
@@ -1011,88 +1005,62 @@ class Shell extends Application
         }
 
         // Strip the command name from the beginning of the code.
-        $code = preg_replace('/^'.preg_quote($commandName, '/').'\s*/', '', $rawCode, 1);
+        $code = preg_replace('/^'.preg_quote($command->getName(), '/').'\s*/', '', $rawCode, 1);
+
+        // For non-interactive mode, we can't ask for more input.
+        if ($this->nonInteractive) {
+            $newInputString = $command->getName().' '.$code;
+            $newShellInput = new ShellInput($newInputString);
+            try {
+                $newShellInput->bind($definition);
+
+                return $newShellInput;
+            } catch (\Throwable $e) {
+                return $input;
+            }
+        }
 
         $codeBuffer = [$code];
         $theme = $this->config->theme();
         $lastEofException = null;
 
-        // Use CodeArgumentParser to validate PHP code like TimeitCommand does
         $parser = new \Psy\Command\CodeArgumentParser();
-        
+
         while (true) {
             try {
-                // Let's try to parse the PHP code. If it's valid, we're good.
                 $parser->parse(implode("\n", $codeBuffer));
-                $lastEofException = null; // It's valid, clear any pending exception.
+                $lastEofException = null;
                 break;
             } catch (\Psy\Exception\ParseErrorException $e) {
-                // If it's not an EOF-related error, we have a real syntax error.
                 $msg = $e->getRawMessage();
-                $isEOF = false;
-                
-                // Check for various EOF and incomplete statement patterns
-                if (strpos($msg, 'unexpected EOF') !== false || 
-                    strpos($msg, 'unexpected end of file') !== false ||
-                    strpos($msg, 'Unexpected token EOF') !== false ||
-                    strpos($msg, "unexpected '{'") !== false || // This is key for incomplete if/for/while statements
-                    strpos($msg, 'unexpected T_IF') !== false ||
-                    strpos($msg, 'unexpected T_FOR') !== false ||
-                    strpos($msg, 'unexpected T_WHILE') !== false ||
-                    strpos($msg, 'unexpected T_FOREACH') !== false ||
-                    strpos($msg, 'unexpected T_SWITCH') !== false ||
-                    strpos($msg, 'unexpected T_TRY') !== false ||
-                    strpos($msg, 'unexpected T_FUNCTION') !== false ||
-                    strpos($msg, 'unexpected T_CLASS') !== false ||
-                    strpos($msg, 'unexpected T_INTERFACE') !== false ||
-                    strpos($msg, 'unexpected T_TRAIT') !== false) {
-                    $isEOF = true;
-                }
-                
-                if (!$isEOF) {
+                if (strpos($msg, 'unexpected EOF') === false && strpos($msg, 'unexpected end of file') === false) {
                     throw $e;
                 }
-
                 $lastEofException = $e;
             }
 
-            // The code is incomplete, let's ask for more.
             $line = $this->readline->readline($theme->bufferPrompt());
 
-            // User hit Ctrl+D or stdin ended.
             if ($line === false) {
-                // If we're here, it means the code is still incomplete.
-                // We should throw the pending EOF error.
                 if ($lastEofException) {
                     throw $lastEofException;
                 }
-                // This should not be reached if the logic is sound.
                 break;
             }
 
             $codeBuffer[] = $line;
         }
 
-        // If we got additional lines, reconstruct the input
-        // If we only have one line in the buffer, nothing was added, so we can just return the original input.
-        if (count($codeBuffer) <= 1) {
-            return $input;
-        }
-
-        // Reconstruct the input by taking the original input string and appending the new lines.
-        // This preserves all other arguments and options.
-        $extraLines = array_slice($codeBuffer, 1);
-        $newInputString = $input->__toString() . "\n" . implode("\n", $extraLines);
-
-        // Create new ShellInput and bind it to the command definition
+        $completeCode = implode("\n", $codeBuffer);
+        $newInputString = $command->getName().' '.$completeCode;
         $newShellInput = new ShellInput($newInputString);
+
         try {
             $newShellInput->bind($definition);
         } catch (\Throwable $e) {
-            // If binding fails, return the original input
             return $input;
         }
-        
+
         return $newShellInput;
     }
 

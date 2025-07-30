@@ -41,6 +41,7 @@ class ProfileCommand extends Command
                 new InputOption('threshold', '', InputOption::VALUE_REQUIRED, 'Minimum time threshold in microseconds', 0),
                 new InputOption('show-params', '', InputOption::VALUE_NONE, 'Show function parameters in profiling results.'),
                 new InputOption('full-namespaces', '', InputOption::VALUE_NONE, 'Show complete namespaces without truncation.'),
+                new InputOption('trace-all', '', InputOption::VALUE_NONE, 'Use Xdebug tracing to capture ALL function calls (including strlen, etc.)'),
                 new CodeArgument('code', CodeArgument::REQUIRED, 'The code to profile.'),
             ])
             ->setDescription('Profile a string of PHP code and display the execution summary.')
@@ -76,41 +77,22 @@ HELP
         }
 
         $code = $input->getArgument('code');
-        $outFile = $input->getOption('out');
+$outFile = $input->getOption('out');
         $filterLevel = $input->getOption('full') ? 'all' : $input->getOption('filter');
         $threshold = (int) $input->getOption('threshold');
         $showParams = $input->getOption('show-params');
         $fullNamespaces = $input->getOption('full-namespaces');
 
-        // Préparer le contexte d'exécution
-        $shell = $this->getShell();
-        $context = $this->prepareContext($shell);
-        
-        // Démarrer le profilage
-        xhprof_enable(XHPROF_FLAGS_CPU + XHPROF_FLAGS_MEMORY);
-        
-        // Exécuter le code dans le contexte préparé
+        // Exécuter le code avec profilage isolé
         try {
-            extract($context['variables']);
-            foreach ($context['includes'] as $file) {
-                require_once $file;
-            }
-            
-            // Use a closure to properly scope the code
-            $closure = function() use ($code) {
-                return eval(str_ends_with(rtrim($code, ';'), ';') ? $code : 'return ' . $code . ';');
-            };
-            
-            $result = $closure();
-            $success = true;
+            $result = $this->executeWithProfiling($code, $filterLevel, $output);
+            $success = $result['success'];
+            $profile_data = $result['data'];
         } catch (\Throwable $e) {
-            $result = $e;
             $success = false;
             $output->writeln(sprintf('<error>%s</error>', $e->getMessage()));
+            return 1;
         }
-        
-        // Arrêter le profilage et récupérer les données
-        $profile_data = xhprof_disable();
         
         if ($success) {
             // Filtrer et formater les résultats
@@ -128,60 +110,44 @@ HELP
         return $success ? 0 : 1;
     }
 
-    private function createProfileScript(string $code, string $filterLevel, string $metricsFile): string
+    private function prepareCodeWithContext(string $code): string
     {
         $shell = $this->getShell();
-        
-        // Récupérer le contexte actuel (variables, includes, etc.)
         $context = $this->serializeContext($shell);
         
-        // Créer un script qui:
-        // 1. Restaure le contexte
-        // 2. Définit un marqueur de début
-        // 3. Exécute le code utilisateur
-        // 4. Définit un marqueur de fin
+        // S'assurer que le code se termine par un point-virgule
+        $code = rtrim($code);
+        if (!str_ends_with($code, ';')) {
+            $code = $code . ';';
+        }
         
-        $script = <<<'PHP'
-<?php
-// Restoration du contexte
-%s
-
-// Marqueur de début du code utilisateur
-$__profile_start = microtime(true);
-$__profile_start_memory = memory_get_usage(true);
-
-// === DÉBUT CODE UTILISATEUR ===
-try {
-    $__profile_result = eval(%s);
-    $__profile_success = true;
-} catch (\Throwable $__profile_exception) {
-    $__profile_result = $__profile_exception;
-    $__profile_success = false;
+        // Utiliser un heredoc pour éviter les problèmes de parsing avec les accolades
+        $fullCode = '
+// Vérifier que XHProf est disponible
+if (!extension_loaded(\'xhprof\')) {
+    echo "XHProf extension is not loaded\n";
+    exit(1);
 }
-// === FIN CODE UTILISATEUR ===
 
-$__profile_end = microtime(true);
-$__profile_end_memory = memory_get_usage(true);
+// Restaurer le contexte du shell
+' . $context . '
 
-// Sauvegarder les métriques
-file_put_contents(%s, json_encode([
-    'success' => $__profile_success,
-    'start_time' => $__profile_start,
-    'end_time' => $__profile_end,
-    'duration' => ($__profile_end - $__profile_start) * 1000000,
-    'start_memory' => $__profile_start_memory,
-    'end_memory' => $__profile_end_memory,
-    'memory_delta' => $__profile_end_memory - $__profile_start_memory,
-    'result' => $__profile_success ? var_export($__profile_result, true) : $__profile_exception->getMessage(),
-]));
-PHP;
+// Commencer le profilage XHProf
+xhprof_enable(XHPROF_FLAGS_CPU + XHPROF_FLAGS_MEMORY);
+
+// Exécuter le code utilisateur
+' . $code . '
+
+// Arrêter le profilage et sauvegarder
+$profile_data = xhprof_disable();
+
+// Sauvegarder dans un fichier temporaire pour récupération
+$tmp_file = sys_get_temp_dir() . \'/psysh_profile_\' . getmypid() . \'.dat\';
+file_put_contents($tmp_file, serialize($profile_data));
+fprintf(STDERR, "PSYSH_PROFILE_FILE:%s\n", $tmp_file);
+';
         
-        return sprintf(
-            $script,
-            $context,
-            var_export($code, true),
-            var_export($metricsFile, true)
-        );
+        return $fullCode;
     }
 
     private function serializeContext($shell): string
@@ -207,91 +173,48 @@ PHP;
 
     private function executeWithProfiling(string $code, string $filterLevel, OutputInterface $output): array
     {
-        $tmpDir = sys_get_temp_dir();
-        $scriptFile = tempnam($tmpDir, 'psysh_profile_script_');
+        // Préparer le code avec contexte et XHProf
+        $fullCode = $this->prepareCodeWithContext($code);
         
-        // Créer le fichier de métriques avec le même nom de base que le script
-        $metricsFile = str_replace('_script_', '_metrics_', $scriptFile);
-        
-        // Debugging: Check if the directory is writable
-        if (!is_writable($tmpDir)) {
-            throw new \RuntimeException('Le répertoire temporaire n\'est pas accessible en écriture: ' . $tmpDir);
-        }
-        
-        // Créer le script de profilage avec le bon chemin de fichier de métriques
-        $script = $this->createProfileScript($code, $filterLevel, $metricsFile);
-        
-        // Debugging: Afficher le script généré
-        $output->writeln('Generated script:');
-        $output->writeln('================');
-        $output->writeln($script);
-        $output->writeln('================');
-        
-        file_put_contents($scriptFile, $script);
-        
-        // Configuration Xdebug optimisée
-        $process = new Process([
+        // Exécuter avec PHP -r pour éviter le bruit de PsySH
+        $process = new \Symfony\Component\Process\Process([
             PHP_BINARY,
             '-d', 'memory_limit=-1',
-            '-d', 'xdebug.mode=profile',
-            '-d', 'xdebug.start_with_request=yes',
-            '-d', 'xdebug.output_dir=' . $tmpDir,
-            '-d', 'xdebug.profiler_output_name=cachegrind.out.%t.%p',
-            '-d', 'xdebug.collect_params=1',
-            '-d', 'xdebug.collect_return=1',
-            $scriptFile
+            '-r', $fullCode
         ]);
         
         $process->run();
-        
-        // Debugging: Afficher la sortie du process
-        $output->writeln('Process output: ' . $process->getOutput());
-        $output->writeln('Process error output: ' . $process->getErrorOutput());
-        $output->writeln('Process exit code: ' . $process->getExitCode());
         
         // Vérifier si le process s'est bien exécuté
         if (!$process->isSuccessful()) {
             throw new \RuntimeException('Erreur lors de l\'exécution du profiling: ' . $process->getErrorOutput());
         }
         
-        // Trouver le fichier cachegrind généré
-        $files = glob($tmpDir . '/cachegrind.out.*');
-        $output->writeln('Cachegrind files found: ' . print_r($files, true));
-        $cachegrindFile = end($files);
-        $output->writeln('Selected cachegrind file: ' . ($cachegrindFile ?: 'NONE'));
-        
-        // Vérifier que le fichier de métriques existe avant de le lire
-        if (!file_exists($metricsFile)) {
-            throw new \RuntimeException('Le fichier de métriques n\'a pas été créé: ' . $metricsFile);
+        // Récupérer le nom du fichier de données depuis stderr
+        $errorOutput = $process->getErrorOutput();
+        if (preg_match('/PSYSH_PROFILE_FILE:(.+)/', $errorOutput, $matches)) {
+            $profileFile = trim($matches[1]);
+        } else {
+            throw new \RuntimeException('Impossible de trouver le fichier de profiling dans la sortie: ' . $errorOutput);
         }
         
-        $output->writeln('Metrics file exists and contains: ' . substr(file_get_contents($metricsFile), 0, 200) . '...');
-        
-        // Lire les métriques avec gestion d'erreur
-        $metricsContent = file_get_contents($metricsFile);
-        if ($metricsContent === false) {
-            throw new \RuntimeException('Impossible de lire le fichier de métriques: ' . $metricsFile);
+        // Vérifier que le fichier existe
+        if (!file_exists($profileFile)) {
+            throw new \RuntimeException('Le fichier de profilage n\'a pas été créé: "' . $profileFile . '"');
         }
         
-        $metrics = json_decode($metricsContent, true);
-        if ($metrics === null) {
-            throw new \RuntimeException('Impossible de décoder les métriques JSON: ' . json_last_error_msg());
+        // Lire les données XHProf
+        $profileData = unserialize(file_get_contents($profileFile));
+        if ($profileData === false) {
+            throw new \RuntimeException('Impossible de lire les données de profilage');
         }
         
-        // Parser le fichier cachegrind
-        $profileData = $this->parseCachegrindEnhanced($cachegrindFile, $metrics);
-        
-        // Nettoyer
-        unlink($scriptFile);
-        if (file_exists($metricsFile)) {
-            unlink($metricsFile);
-        }
+        // Nettoyer le fichier temporaire
+        unlink($profileFile);
         
         return [
-            'success' => $metrics['success'],
-            'data' => $profileData,
-            'cachegrind' => $cachegrindFile,
-            'metrics' => $metrics
+            'success' => true,
+            'data' => $profileData
         ];
     }
 
@@ -371,6 +294,7 @@ PHP;
             $enhanced[$name] = $data + [
                 'time_percent' => $totalTime > 0 ? ($data['time'] / $totalTime) * 100 : 0,
                 'memory_percent' => $totalMemory > 0 ? ($data['memory'] / $totalMemory) * 100 : 0,
+                'is_user' => $this->isUserFunction($name),
             ];
         }
         
@@ -437,7 +361,7 @@ PHP;
 
     private function filterFunctions(array $functions, string $filterLevel, int $threshold): array
     {
-        return array_filter($functions, function($func) use ($filterLevel, $threshold) {
+        return array_filter($functions, function($func, $name) use ($filterLevel, $threshold) {
             // Filtre par seuil de temps
             if ($func['time'] < $threshold) {
                 return false;
@@ -446,7 +370,8 @@ PHP;
             // Filtre par niveau
             switch ($filterLevel) {
                 case 'user':
-                    return $func['is_user'];
+                    // En mode user, inclure le code utilisateur ET les fonctions PHP appelées directement
+                    return $func['is_user'] || $this->isDirectlyCalledFunction($name);
                 case 'php':
                     return $func['is_user'] || !$this->isInternalFunction($func['name']);
                 case 'all':
@@ -454,13 +379,58 @@ PHP;
             }
             
             return false;
-        });
+        }, ARRAY_FILTER_USE_BOTH);
     }
 
     private function isInternalFunction(string $name): bool
     {
         // Fonctions PHP internes n'ont pas de namespace
         return !str_contains($name, '\\') && !str_contains($name, '::');
+    }
+
+    private function isUserFunction(string $name): bool
+    {
+        // Vérifier si c'est du code PsySH par le namespace
+        foreach (self::PSYSH_NAMESPACES as $namespace) {
+            if (str_starts_with($name, $namespace)) {
+                return false;
+            }
+        }
+        
+        // Les fonctions internes PHP ne sont pas du code utilisateur
+        if ($this->isInternalFunction($name)) {
+            return false;
+        }
+        
+        // Les fonctions eval générées par le script sont du code utilisateur
+        if (str_contains($name, 'eval()\'d code')) {
+            return true;
+        }
+        
+        // Tout le reste est considéré comme du code utilisateur
+        return true;
+    }
+
+    private function isDirectlyCalledFunction(string $name): bool
+    {
+        // Liste des fonctions PHP internes couramment utilisées qu'on veut voir par défaut
+        $commonFunctions = [
+            'sleep', 'usleep', 'time_nanosleep',
+            'strlen', 'substr', 'strpos', 'str_replace',
+            'array_map', 'array_filter', 'array_reduce',
+            'json_encode', 'json_decode',
+            'file_get_contents', 'file_put_contents',
+            'curl_exec', 'curl_init',
+            'mysqli_query', 'mysql_query',
+            'hash', 'hash_hmac',
+            'openssl_encrypt', 'openssl_decrypt',
+            'preg_match', 'preg_replace',
+            'explode', 'implode',
+            'count', 'sizeof',
+            'microtime', 'gettimeofday'
+        ];
+        
+        return in_array($name, $commonFunctions);
     }
 
     private function formatFunctionName(string $name): string
