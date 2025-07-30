@@ -3,14 +3,26 @@
 namespace Psy\Command;
 
 use Psy\Input\CodeArgument;
+use Psy\Exception\RuntimeException;
 use Symfony\Component\Console\Helper\Table;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
-use Symfony\Component\Process\Process;
 
 class ProfileCommand extends Command
 {
+    private const IGNORED_FUNCTIONS = [
+        // Fonctions internes de PHP qu'on veut toujours ignorer
+        'php::zend_call_function',
+        'php::zend_call_method',
+        'php::call_user_func',
+        'php::call_user_func_array',
+        // Fonctions de PsySH qu'on veut ignorer sauf en mode --full
+        'Psy\\Shell::handleInput',
+        'Psy\\Shell::execute',
+        'Psy\\ExecutionClosure::execute',
+    ];
+
     private const PSYSH_NAMESPACES = [
         'Psy\\',
         'PhpParser\\',
@@ -26,7 +38,9 @@ class ProfileCommand extends Command
                 new InputOption('out', '', InputOption::VALUE_REQUIRED, 'Path to the output file for the profiling data.'),
                 new InputOption('full', '', InputOption::VALUE_NONE, 'Show full profiling data including PsySH overhead.'),
                 new InputOption('filter', '', InputOption::VALUE_REQUIRED, 'Filter level: user (default), php, all', 'user'),
-                new InputOption('threshold', '', InputOption::VALUE_REQUIRED, 'Minimum time threshold in microseconds', '1000'),
+                new InputOption('threshold', '', InputOption::VALUE_REQUIRED, 'Minimum time threshold in microseconds', 0),
+                new InputOption('show-params', '', InputOption::VALUE_NONE, 'Show function parameters in profiling results.'),
+                new InputOption('full-namespaces', '', InputOption::VALUE_NONE, 'Show complete namespaces without truncation.'),
                 new CodeArgument('code', CodeArgument::REQUIRED, 'The code to profile.'),
             ])
             ->setDescription('Profile a string of PHP code and display the execution summary.')
@@ -53,32 +67,65 @@ HELP
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        if (!\extension_loaded('xdebug')) {
-            $output->writeln('<error>Xdebug extension is not loaded. The profile command is unavailable.</error>');
-            return 1;
+        if (!\extension_loaded('xhprof')) {
+            throw new RuntimeException(
+                'XHProf extension is not loaded. The profile command requires XHProf to be installed and enabled.\n' .
+                'Install it with: pecl install xhprof\n' .
+                'Then add "extension=xhprof.so" to your php.ini'
+            );
         }
 
         $code = $input->getArgument('code');
         $outFile = $input->getOption('out');
         $filterLevel = $input->getOption('full') ? 'all' : $input->getOption('filter');
         $threshold = (int) $input->getOption('threshold');
+        $showParams = $input->getOption('show-params');
+        $fullNamespaces = $input->getOption('full-namespaces');
 
-        // Exécuter avec profilage
-        $result = $this->executeWithProfiling($code, $filterLevel, $output);
+        // Préparer le contexte d'exécution
+        $shell = $this->getShell();
+        $context = $this->prepareContext($shell);
         
-        if (!$result['success']) {
-            return 1;
+        // Démarrer le profilage
+        xhprof_enable(XHPROF_FLAGS_CPU + XHPROF_FLAGS_MEMORY);
+        
+        // Exécuter le code dans le contexte préparé
+        try {
+            extract($context['variables']);
+            foreach ($context['includes'] as $file) {
+                require_once $file;
+            }
+            
+            // Use a closure to properly scope the code
+            $closure = function() use ($code) {
+                return eval(str_ends_with(rtrim($code, ';'), ';') ? $code : 'return ' . $code . ';');
+            };
+            
+            $result = $closure();
+            $success = true;
+        } catch (\Throwable $e) {
+            $result = $e;
+            $success = false;
+            $output->writeln(sprintf('<error>%s</error>', $e->getMessage()));
         }
-
-        // Analyser et afficher les résultats
-        $this->displayResults($result['data'], $output, $filterLevel, $threshold);
-
-        // Exporter si demandé
-        if ($outFile) {
-            $this->exportProfile($result['cachegrind'], $outFile, $output);
+        
+        // Arrêter le profilage et récupérer les données
+        $profile_data = xhprof_disable();
+        
+        if ($success) {
+            // Filtrer et formater les résultats
+            $filtered_data = $this->filterProfileData($profile_data, $filterLevel === 'all');
+            
+            // Afficher les résultats
+            $this->displayResults($filtered_data, $output, $filterLevel, $threshold, $showParams, $fullNamespaces);
+            
+            // Sauvegarder le rapport complet si demandé
+            if ($outFile) {
+                $this->saveProfileData($profile_data, $outFile, $output);
+            }
         }
-
-        return 0;
+        
+        return $success ? 0 : 1;
     }
 
     private function createProfileScript(string $code, string $filterLevel, string $metricsFile): string
@@ -300,13 +347,13 @@ PHP;
     {
         // Vérifier si c'est du code PsySH par le namespace
         foreach (self::PSYSH_NAMESPACES as $namespace) {
-            if (strpos($function, $namespace) === 0) {
+            if (str_starts_with($function, $namespace)) {
                 return true;
             }
         }
         
         // Vérifier par le fichier
-        if (strpos($file, 'vendor/psy/psysh') !== false) {
+        if (str_contains($file, 'vendor/psy/psysh')) {
             return true;
         }
         
@@ -324,15 +371,13 @@ PHP;
             $enhanced[$name] = $data + [
                 'time_percent' => $totalTime > 0 ? ($data['time'] / $totalTime) * 100 : 0,
                 'memory_percent' => $totalMemory > 0 ? ($data['memory'] / $totalMemory) * 100 : 0,
-                'time_ms' => $data['time'] / 1000,
-                'memory_kb' => $data['memory'] / 1024,
             ];
         }
         
         return $enhanced;
     }
 
-    private function displayResults(array $data, OutputInterface $output, string $filterLevel, int $threshold): void
+    private function displayResults(array $data, OutputInterface $output, string $filterLevel, int $threshold, bool $showParams = false, bool $fullNamespaces = false): void
     {
         // Filtrer selon le niveau
         $filtered = $this->filterFunctions($data, $filterLevel, $threshold);
@@ -347,17 +392,27 @@ PHP;
         
         // Afficher le tableau
         $table = new Table($output);
-        $table->setHeaders(['Function', 'Calls', 'Time (ms)', 'Time %', 'Memory (KB)', 'Memory %']);
+        $headers = ['Function', 'Calls', 'Time (μs)', 'Time %', 'Memory (B)', 'Memory %'];
+        if ($showParams) {
+            $headers[] = 'Parameters';
+        }
+        $table->setHeaders($headers);
         
         foreach (array_slice($filtered, 0, 20) as $name => $func) {
-            $table->addRow([
-                $this->formatFunctionName($name),
+            $row = [
+                $fullNamespaces ? $name : $this->formatFunctionName($name),
                 $func['calls'],
-                number_format($func['time_ms'], 3),
+                number_format($func['time'], 1), // Afficher en microsecondes
                 number_format($func['time_percent'], 1) . '%',
-                number_format($func['memory_kb'], 2),
+                number_format($func['memory'], 0), // Afficher en bytes
                 number_format($func['memory_percent'], 1) . '%',
-            ]);
+            ];
+            
+            if ($showParams) {
+                $row[] = $this->extractFunctionParams($name);
+            }
+            
+            $table->addRow($row);
         }
         
         $output->writeln(sprintf(
@@ -368,10 +423,15 @@ PHP;
         $table->render();
         
         // Résumé
+        $totalTime = array_sum(array_column($filtered, 'time')); // en microsecondes
+        $totalMemory = array_sum(array_column($filtered, 'memory')); // en bytes
+        
         $output->writeln(sprintf(
-            "\n<comment>Total execution: Time: %.3f ms, Memory: %.2f KB</comment>",
-            array_sum(array_column($filtered, 'time_ms')),
-            array_sum(array_column($filtered, 'memory_kb'))
+            "\n<comment>Total execution: Time: %.1f μs (%.3f ms), Memory: %s bytes (%s)</comment>",
+            $totalTime,
+            $totalTime / 1000,
+            number_format($totalMemory),
+            $this->formatBytes($totalMemory)
         ));
     }
 
@@ -400,7 +460,7 @@ PHP;
     private function isInternalFunction(string $name): bool
     {
         // Fonctions PHP internes n'ont pas de namespace
-        return !strpos($name, '\\') && !strpos($name, '::');
+        return !str_contains($name, '\\') && !str_contains($name, '::');
     }
 
     private function formatFunctionName(string $name): string
@@ -417,12 +477,131 @@ PHP;
         return $name;
     }
 
-    private function exportProfile(string $source, string $target, OutputInterface $output): void
+    private function prepareContext($shell): array
     {
-        if (copy($source, $target)) {
-            $output->writeln(sprintf('<info>Profile data exported to: %s</info>', $target));
+        // Récupérer toutes les variables du contexte actuel
+        $variables = $shell->getScopeVariables();
+        
+        // Exclure les variables spéciales de PsySH
+        $excludedVars = ['this', '_', '_e'];
+        $variables = array_diff_key($variables, array_flip($excludedVars));
+        
+        // Récupérer les fichiers inclus
+        $includes = $shell->getIncludes();
+        
+        return [
+            'variables' => $variables,
+            'includes' => $includes,
+        ];
+    }
+
+    private function filterProfileData(array $data, bool $showAll = false): array
+    {
+        $filtered = [];
+        
+        foreach ($data as $parentChild => $metrics) {
+            // Séparer parent et enfant - gérer le cas où il n'y a pas de '==>'
+            if (str_contains($parentChild, '==>')) {
+                [$parent, $child] = explode('==>', $parentChild, 2);
+            } else {
+                $parent = null;
+                $child = $parentChild;
+            }
+            
+            // Ignorer les clés vides ou nulles
+            if (empty($child) || $child === null) {
+                continue;
+            }
+            
+            // Toujours ignorer certaines fonctions internes
+            if (in_array($child, self::IGNORED_FUNCTIONS)) {
+                continue;
+            }
+            
+            // En mode non-full, appliquer des filtres intelligents
+            if (!$showAll) {
+                // Ignorer les fonctions PsySH
+                $isPsyshFunction = false;
+                foreach (self::PSYSH_NAMESPACES as $namespace) {
+                    if (str_starts_with((string)$child, $namespace)) {
+                        $isPsyshFunction = true;
+                        break;
+                    }
+                }
+                if ($isPsyshFunction) {
+                    continue;
+                }
+                
+                // Ignorer seulement les fonctions internes appelées par le système de profilage,
+                // pas celles appelées par le code utilisateur
+                if ($this->isProfilingSystemCall($parent, $child)) {
+                    continue;
+                }
+            }
+            
+            $filtered[$child] = [
+                'calls' => $metrics['ct'] ?? 0,
+                'time' => ($metrics['wt'] ?? 0), // Garder en microsecondes
+                'memory' => $metrics['mu'] ?? 0,
+                'peak_memory' => $metrics['pmu'] ?? 0,
+                'cpu_time' => ($metrics['cpu'] ?? 0),
+            ];
+        }
+        
+        return $this->enhanceWithCallGraph($filtered);
+    }
+
+    private function isProfilingSystemCall(?string $parent, string $child): bool
+    {
+        // Liste des fonctions internes au profilage
+        $profilingFunctions = [
+            'Psy\\Command\\ProfileCommand::execute',
+            'Psy\\Command\\ProfileCommand::displayResults',
+            'Psy\\Command\\ProfileCommand::filterProfileData',
+            'Psy\\Command\\ProfileCommand::enhanceWithCallGraph',
+            'Psy\\Command\\ProfileCommand::filterFunctions',
+        ];
+
+        if (in_array($parent, $profilingFunctions)) {
+            // Si le parent est une fonction de profilage, on ignore l'enfant
+            return true;
+        }
+
+        // Ignorer les appels à `eval` qui viennent de notre commande
+        if ($child === 'eval' && $parent !== null && str_starts_with($parent, 'Psy\\Command\\ProfileCommand')) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private function extractFunctionParams(string $functionName): string
+    {
+        // Tenter d'extraire les paramètres de la fonction
+        if (preg_match('/(?<name>.*?)(?:\((?<params>.*?)\))?$/', $functionName, $matches)) {
+            return $matches['params'] ?? '';
+        }
+        return '';
+    }
+
+    private function formatBytes(int $bytes): string
+    {
+        $units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        $i = 0;
+        while ($bytes >= 1024 && $i < count($units) - 1) {
+            $bytes /= 1024;
+            $i++;
+        }
+        return round($bytes, 2) . ' ' . $units[$i];
+    }
+
+    private function saveProfileData(array $data, string $outFile, OutputInterface $output): void
+    {
+        $jsonData = json_encode($data, JSON_PRETTY_PRINT);
+        if (file_put_contents($outFile, $jsonData) !== false) {
+            $output->writeln(sprintf('<info>Profile data saved to: %s</info>', $outFile));
         } else {
-            $output->writeln('<error>Failed to export profile data</error>');
+            $output->writeln('<error>Failed to save profile data</error>');
         }
     }
 }

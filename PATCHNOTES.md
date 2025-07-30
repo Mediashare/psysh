@@ -1,8 +1,47 @@
 # PsySH ProfileCommand - Patch Notes
 
+## Version 1.0.2 - 2025-07-30
+
+### Bug Fixes
+
+#### Fixed Multi-line Input Support for Commands with CodeArgument
+- **Issue**: Commands like `timeit` that accept PHP code arguments (CodeArgument) were failing when the code was incomplete on the first line, preventing multi-line input.
+- **Root Cause**: 
+  - The `ShellInput` parser was including the command name in the extracted code argument
+  - For `timeit if (true) {`, the code argument became `"timeit if (true) {"` instead of `"if (true) {"`
+  - This caused the `CodeArgumentParser` to throw `"unexpected T_IF"` instead of `"unexpected EOF"`
+  - The multi-line detection logic didn't recognize `"unexpected T_IF"` as an incomplete code pattern
+- **Fix**: 
+  - Added `hasCodeArgument()` method to `ShellInput` class for better detection
+  - Modified `handleMultiLineCodeArgument()` in `Shell.php` to properly extract PHP code by removing the command name prefix
+  - The code extraction now correctly identifies `"if (true) {"` as incomplete PHP code requiring multi-line input
+
+#### Files Modified
+- `src/Input/ShellInput.php` - Added `hasCodeArgument()` method
+- `src/Shell.php` - Fixed code extraction logic in `handleMultiLineCodeArgument()`
+
+#### Example Usage
+```php
+// This now works correctly with multi-line input:
+> timeit if (true) {
+. echo "hello";
+. }
+Command took 0.000123 seconds to complete.
+```
+
+## Version 1.0.1 - 2025-07-30
+
+### Bug Fixes
+
+#### Fixed "Undefined array key 'is_user'" error
+- **Issue**: `profile` command failed with a PHP warning when processing profiling data.
+- **Root Cause**: The `filterProfileData` function was not setting the `is_user` flag, which is required by the `filterFunctions` method to correctly identify and filter user-land code versus PsySH internal code.
+- **Fix**: Modified `filterProfileData` to correctly identify PsySH functions and set the `is_user` flag to `false` for them, ensuring the filter works as expected.
+
 ## Version 1.0.0 - 2024-07-29
 
-### 🔧 Bug Fixes
+### 
+ Bug Fixes
 
 #### Fixed Xdebug 3.x Compatibility Issues
 - **Issue**: ProfileCommand was failing with "Could not find a cachegrind output file" error
@@ -61,7 +100,8 @@ $script .= $userCode."\n";
 - Implemented correct regex patterns for Xdebug 3.x format
 - Fixed summary parsing to extract both time and memory values
 
-### ✨ Improvements
+### 
+ Improvements
 
 **Better Error Handling**
 - Parser no longer crashes on unexpected format variations
@@ -71,7 +111,8 @@ $script .= $userCode."\n";
 - Works with Xdebug 3.x (tested with 3.4.4)
 - Maintains backward compatibility where possible
 
-### 🧪 Testing
+### 
+ Testing
 
 **Verified Functionality**
 ```bash
@@ -87,7 +128,8 @@ Profiling results (user code only):
 ...
 ```
 
-### 🔍 Technical Details
+### 
+ Technical Details
 
 **Files Modified**
 - `src/Command/ProfileCommand.php`
@@ -104,7 +146,8 @@ Profiling results (user code only):
 - `php` - Shows user code + PHP internal functions  
 - `all` - Shows everything including framework overhead
 
-### 📋 Notes
+### 
+ Notes
 
 - The fix ensures profiling works for ALL filter levels, not just `--full`
 - Performance data is now accurately captured and displayed

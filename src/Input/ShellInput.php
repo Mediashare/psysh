@@ -72,6 +72,16 @@ class ShellInput extends StringInput
     }
 
     /**
+     * Check if this input has a code argument.
+     *
+     * @return bool
+     */
+    public function hasCodeArgument(): bool
+    {
+        return $this->hasCodeArgument;
+    }
+
+    /**
      * Tokenizes a string.
      *
      * The version of this on StringInput is good, but doesn't handle code

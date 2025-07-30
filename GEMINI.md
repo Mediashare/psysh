@@ -39,3 +39,11 @@ Psysh is a modular, object-oriented application with a clear separation of conce
   2. Implement the `NodeVisitor` interface methods (e.g., `leaveNode`) to modify the AST.
   3. Register the new pass in the `CodeCleaner` service.
   4. Add relevant tests to cover the new transformation logic.
+
+- **Profiling**:
+  1. The `profile` command uses `xhprof` to profile code.
+  2. The command is located in `src/Command/ProfileCommand.php`.
+  3. The command uses a `CodeCleaner` pass to prepare the code for profiling.
+  4. The command uses a `Process` to execute the code with `xhprof` enabled.
+  5. The command parses the `xhprof` output to display a summary table.
+  6. See [PROFILING.md](PROFILING.md) for more details.

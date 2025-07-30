@@ -323,7 +323,34 @@ class CodeCleaner
     {
         $msg = $e->getRawMessage();
 
-        return ($msg === 'Unexpected token EOF') || (\strpos($msg, 'Syntax error, unexpected EOF') !== false);
+        // Standard EOF patterns
+        if (($msg === 'Unexpected token EOF') || (\strpos($msg, 'Syntax error, unexpected EOF') !== false)) {
+            return true;
+        }
+
+        // Handle cases where specific tokens are unexpected at EOF (incomplete statements)
+        // These patterns indicate that the parser expected more content after the token
+        $eofPatterns = [
+            'Syntax error, unexpected T_IF',
+            'Syntax error, unexpected T_FOR', 
+            'Syntax error, unexpected T_WHILE',
+            'Syntax error, unexpected T_FOREACH',
+            'Syntax error, unexpected T_SWITCH',
+            'Syntax error, unexpected T_TRY',
+            'Syntax error, unexpected T_FUNCTION',
+            'Syntax error, unexpected T_CLASS',
+            'Syntax error, unexpected T_INTERFACE',
+            'Syntax error, unexpected T_TRAIT',
+            'unexpected end of file',
+        ];
+
+        foreach ($eofPatterns as $pattern) {
+            if (\strpos($msg, $pattern) !== false) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

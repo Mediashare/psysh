@@ -49,7 +49,18 @@ class ExecutionLoopClosure extends ExecutionClosure
                         \set_error_handler([$__psysh__, 'handleError']);
 
                         // Evaluate the current code buffer
-                        $_ = eval($__psysh__->onExecute($__psysh__->flushCode() ?: ExecutionClosure::NOOP_INPUT));
+                        $code = $__psysh__->flushCode();
+                        if ($code) {
+                            $code = $__psysh__->onExecute($code);
+                            if ($__psysh__->hasCommand($code)) {
+                                $__psysh__->runCommand($code);
+                                $_ = null; // Command output is handled by the command itself
+                            } else {
+                                $_ = eval($code ?: ExecutionClosure::NOOP_INPUT);
+                            }
+                        } else {
+                            $_ = null;
+                        }
                     } catch (\Throwable $_e) {
                         // Clean up on our way out.
                         if (\ob_get_level() > 0) {

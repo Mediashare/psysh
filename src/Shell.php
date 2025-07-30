@@ -939,11 +939,24 @@ class Shell extends Application
             throw new \InvalidArgumentException('Command not found: '.$input);
         }
 
-        $input = new ShellInput(\str_replace('\\', '\\\\', \rtrim($input, " \t\n\r\0\x0B;")));
+        $shellInput = new ShellInput(\str_replace('\\', '\\\\', \rtrim($input, " \t\n\r\0\x0B;")));
+        
+        // Try to bind first, but catch any exceptions
+        try {
+            $shellInput->bind($command->getDefinition());
+        } catch (\Throwable $e) {
+            // If binding fails, we can't proceed with multi-line handling
+            // Just run the command normally and let it handle the error
+        }
 
-        if (!$input->hasParameterOption(['--help', '-h'])) {
+        // Special handling for commands with CodeArgument to allow multi-line input
+        if ($shellInput->hasCodeArgument()) {
+            $shellInput = $this->handleMultiLineCodeArgument($shellInput);
+        }
+
+        if (!$shellInput->hasParameterOption(['--help', '-h'])) {
             try {
-                return $command->run($input, $this->output);
+                return $command->run($shellInput, $this->output);
             } catch (\Exception $e) {
                 if (!self::needsInputHelp($e)) {
                     throw $e;
@@ -965,6 +978,122 @@ class Shell extends Application
         $helpCommand->setCommand($command);
 
         return $helpCommand->run(new StringInput(''), $this->output);
+    }
+
+    private function handleMultiLineCodeArgument(ShellInput $input): ShellInput
+    {
+        // Only handle multi-line code arguments in interactive mode
+        // For non-interactive mode, we assume the input is complete and don't ask for more
+        if ($this->nonInteractive) {
+            return $input;
+        }
+
+        $definition = $this->getCommand($input->__toString())->getDefinition();
+        $codeArgumentName = null;
+
+        foreach ($definition->getArguments() as $argument) {
+            if ($argument instanceof \Psy\Input\CodeArgument) {
+                $codeArgumentName = $argument->getName();
+                break;
+            }
+        }
+
+        if ($codeArgumentName === null) {
+            return $input;
+        }
+
+        $commandName = $this->getCommand($input->__toString())->getName();
+        $rawCode = $input->getArgument($codeArgumentName);
+
+        // If the initial code is empty, we don't need to ask for more input.
+        if (empty(trim($rawCode))) {
+            return $input;
+        }
+
+        // Strip the command name from the beginning of the code.
+        $code = preg_replace('/^'.preg_quote($commandName, '/').'\s*/', '', $rawCode, 1);
+
+        $codeBuffer = [$code];
+        $theme = $this->config->theme();
+        $lastEofException = null;
+
+        // Use CodeArgumentParser to validate PHP code like TimeitCommand does
+        $parser = new \Psy\Command\CodeArgumentParser();
+        
+        while (true) {
+            try {
+                // Let's try to parse the PHP code. If it's valid, we're good.
+                $parser->parse(implode("\n", $codeBuffer));
+                $lastEofException = null; // It's valid, clear any pending exception.
+                break;
+            } catch (\Psy\Exception\ParseErrorException $e) {
+                // If it's not an EOF-related error, we have a real syntax error.
+                $msg = $e->getRawMessage();
+                $isEOF = false;
+                
+                // Check for various EOF and incomplete statement patterns
+                if (strpos($msg, 'unexpected EOF') !== false || 
+                    strpos($msg, 'unexpected end of file') !== false ||
+                    strpos($msg, 'Unexpected token EOF') !== false ||
+                    strpos($msg, "unexpected '{'") !== false || // This is key for incomplete if/for/while statements
+                    strpos($msg, 'unexpected T_IF') !== false ||
+                    strpos($msg, 'unexpected T_FOR') !== false ||
+                    strpos($msg, 'unexpected T_WHILE') !== false ||
+                    strpos($msg, 'unexpected T_FOREACH') !== false ||
+                    strpos($msg, 'unexpected T_SWITCH') !== false ||
+                    strpos($msg, 'unexpected T_TRY') !== false ||
+                    strpos($msg, 'unexpected T_FUNCTION') !== false ||
+                    strpos($msg, 'unexpected T_CLASS') !== false ||
+                    strpos($msg, 'unexpected T_INTERFACE') !== false ||
+                    strpos($msg, 'unexpected T_TRAIT') !== false) {
+                    $isEOF = true;
+                }
+                
+                if (!$isEOF) {
+                    throw $e;
+                }
+
+                $lastEofException = $e;
+            }
+
+            // The code is incomplete, let's ask for more.
+            $line = $this->readline->readline($theme->bufferPrompt());
+
+            // User hit Ctrl+D or stdin ended.
+            if ($line === false) {
+                // If we're here, it means the code is still incomplete.
+                // We should throw the pending EOF error.
+                if ($lastEofException) {
+                    throw $lastEofException;
+                }
+                // This should not be reached if the logic is sound.
+                break;
+            }
+
+            $codeBuffer[] = $line;
+        }
+
+        // If we got additional lines, reconstruct the input
+        // If we only have one line in the buffer, nothing was added, so we can just return the original input.
+        if (count($codeBuffer) <= 1) {
+            return $input;
+        }
+
+        // Reconstruct the input by taking the original input string and appending the new lines.
+        // This preserves all other arguments and options.
+        $extraLines = array_slice($codeBuffer, 1);
+        $newInputString = $input->__toString() . "\n" . implode("\n", $extraLines);
+
+        // Create new ShellInput and bind it to the command definition
+        $newShellInput = new ShellInput($newInputString);
+        try {
+            $newShellInput->bind($definition);
+        } catch (\Throwable $e) {
+            // If binding fails, return the original input
+            return $input;
+        }
+        
+        return $newShellInput;
     }
 
     /**
@@ -1500,7 +1629,7 @@ class Shell extends Application
      *
      * @return bool True if the shell has a command for the given input
      */
-    protected function hasCommand(string $input): bool
+    public function hasCommand(string $input): bool
     {
         if (\preg_match('/([^\s]+?)(?:\s|$)/A', \ltrim($input), $match)) {
             return $this->has($match[1]);
