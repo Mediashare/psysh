@@ -117,58 +117,10 @@ $outFile = $input->getOption('out');
         return $success ? 0 : 1;
     }
 
-    private function prepareCodeWithContext(string $code, bool $debug = false): string
-    {
-        $shell = $this->getShell();
-        $context = $this->serializeContext($shell, $debug);
-        
-        // S'assurer que le code se termine par un point-virgule
-        $code = rtrim($code);
-        if (!str_ends_with($code, ';')) {
-            $code = $code . ';';
-        }
-        
-        // Utiliser un heredoc pour éviter les problèmes de parsing avec les accolades
-        $fullCode = <<<EOPHP
-// Charger opis/closure si disponible
-if (file_exists(__DIR__ . '/vendor/autoload.php')) {
-    require_once __DIR__ . '/vendor/autoload.php';
-    if (!in_array('closure', stream_get_wrappers())) {
-        stream_wrapper_register('closure', 'Opis\Closure\CodeStream');
-    }
-}
-
-// Vérifier que XHProf est disponible
-if (!extension_loaded('xhprof')) {
-    echo "XHProf extension is not loaded\n";
-    exit(1);
-}
-
-// Restaurer le contexte du shell
-$context
-
-// Commencer le profilage XHProf
-xhprof_enable(XHPROF_FLAGS_CPU + XHPROF_FLAGS_MEMORY);
-
-// Exécuter le code utilisateur
-$code
-
-// Arrêter le profilage et sauvegarder
-\$profile_data = xhprof_disable();
-
-// Sauvegarder dans un fichier temporaire pour récupération
-\$tmp_file = sys_get_temp_dir() . '/psysh_profile_' . getmypid() . '.dat';
-file_put_contents(\$tmp_file, serialize(\$profile_data));
-fprintf(STDERR, "PSYSH_PROFILE_FILE:%s\n", \$tmp_file);
-EOPHP;
-        
-        return $fullCode;
-    }
 
     private function prepareCodeWithXdebugTracing(string $code, bool $debug = false): string
     {
         $shell = $this->getShell();
-        $context = $this->serializeContext($shell, $debug);
         
         // S'assurer que le code se termine par un point-virgule
         $code = rtrim($code);
@@ -176,24 +128,29 @@ EOPHP;
             $code = $code . ';';
         }
         
-        // Code simple pour Xdebug tracing
+        // Sérialiser le contexte complet du shell
+        $serializedVars = $this->serializeShellContext($shell, $debug);
+        
+        // Code simple pour Xdebug tracing avec contexte restauré
         $fullCode = <<<EOFPHP
-// Charger opis/closure si disponible
+// Charger l'autoloader si disponible
 if (file_exists(__DIR__ . '/vendor/autoload.php')) {
     require_once __DIR__ . '/vendor/autoload.php';
-    if (!in_array('closure', stream_get_wrappers())) {
-        stream_wrapper_register('closure', 'Opis\Closure\CodeStream');
-    }
 }
 
 // Restaurer le contexte du shell
-{$context}
+{$serializedVars}
 
 // Marquer le début du code utilisateur
 \$start_time = microtime(true);
 
-// Exécuter le code utilisateur
-{$code}
+try {
+    // Exécuter le code utilisateur dans le contexte restauré
+    \$result = eval('{$code}');
+} catch (Throwable \$e) {
+    // Capturer les erreurs mais continuer pour récupérer le temps
+    fprintf(STDERR, "ERROR:%s\n", \$e->getMessage());
+}
 
 // Marquer la fin
 \$end_time = microtime(true);
@@ -206,95 +163,91 @@ EOFPHP;
         return $fullCode;
     }
 
-    private function serializeContext($shell, bool $debug = false): string
+    private function serializeShellContext($shell, bool $debug = false): string
     {
-        $context = [];
-        $context[] = '// -- Contexte PsySH Reconstruit --';
+        $contextLines = [];
         
-        if ($debug) {
-            $context[] = '// Mode DEBUG activé';
-            $context[] = 'echo "[DEBUG] Reconstruction du contexte..." . PHP_EOL;';
+        // 1. Inclure les fichiers requis (similaire à Shell::execute)
+        $includes = $shell->getIncludes();
+        foreach ($includes as $include) {
+            if (file_exists($include)) {
+                $contextLines[] = sprintf('require_once %s;', var_export($include, true));
+            }
         }
-
-        // 1. Capturer tous les autoloaders pertinents
-        $this->captureAutoloaders($context);
-
-        // Inclure la bibliothèque pour les closures
-        $context[] = '// Charger la bibliothèque pour la sérialisation des closures';
-        $context[] = 'if (file_exists(__DIR__ . \'/vendor/autoload.php\')) {';
-        $context[] = '    require_once __DIR__ . \'/vendor/autoload.php\';';
-        $context[] = '}';
-
-        // 2. Capturer les variables d'environnement importantes
-        $this->captureEnvironmentVariables($context);
-
-        // 3. Capturer les constantes définies par l'utilisateur
-        $this->captureShellConstants($context);
-
-        // 4. Capturer les classes et fonctions définies dans le shell
+        
+        // 2. Exécuter le code précédemment défini dans le shell
         $executedCode = $shell->getExecutedCodeAsString();
         if (!empty($executedCode)) {
-            $context[] = "\n// Code défini par l'utilisateur (classes, fonctions)";
-            $context[] = $executedCode;
+            $contextLines[] = "// Code précédemment exécuté dans le shell";
+            $contextLines[] = $executedCode;
         }
-
-        // 5. Capturer les variables du scope
-        $context[] = "\n// Variables du scope de la session";
-        $this->captureShellVariables($shell, $context);
-
-        $context[] = '// -- Fin du Contexte Reconstruit --';
-
-        return implode("\n", array_filter($context));
+        
+        // 3. Restaurer les variables de scope (similaire à ExecutionClosure)
+        $vars = $shell->getScopeVariables(false); // false pour exclure 'this'
+        $contextLines[] = "// Restauration des variables de scope";
+        
+        foreach ($vars as $name => $value) {
+            // Exclure les variables spéciales PsySH
+            if (in_array($name, ['_', '_e', '__out', '__class', '__namespace'])) {
+                continue;
+            }
+            
+            try {
+                // Utiliser var_export pour la sérialisation simple
+                if ($this->canVarExport($value)) {
+                    $contextLines[] = sprintf('$%s = %s;', $name, var_export($value, true));
+                } elseif ($value instanceof \Closure) {
+                    // Gestion spéciale des closures avec opis/closure si disponible
+                    if (function_exists('\Opis\Closure\serialize')) {
+                        try {
+                            $serialized = \Opis\Closure\serialize($value);
+                            $contextLines[] = sprintf('$%s = \Opis\Closure\unserialize(%s);', $name, var_export($serialized, true));
+                        } catch (\Throwable $e) {
+                            $contextLines[] = sprintf('// Closure $%s could not be serialized: %s', $name, $e->getMessage());
+                        }
+                    } else {
+                        $contextLines[] = sprintf('// Closure $%s ignored - opis/closure not available', $name);
+                    }
+                } elseif (is_object($value)) {
+                    // Pour les objets, tenter la sérialisation
+                    $serialized = @serialize($value);
+                    if ($serialized !== false) {
+                        $contextLines[] = sprintf('$%s = unserialize(%s);', $name, var_export($serialized, true));
+                    } else {
+                        $contextLines[] = sprintf('// Variable $%s (object %s) could not be serialized', $name, get_class($value));
+                    }
+                } else {
+                    $contextLines[] = sprintf('// Variable $%s of type %s skipped', $name, gettype($value));
+                }
+            } catch (\Throwable $e) {
+                $contextLines[] = sprintf('// Variable $%s could not be exported: %s', $name, $e->getMessage());
+            }
+        }
+        
+        if ($debug) {
+            $contextLines[] = sprintf('// Debug: %d variables restored', count($vars));
+        }
+        
+        return implode("\n", $contextLines);
     }
     
-    private function captureAutoloaders(array &$context): void
+    private function canVarExport($value): bool
     {
-        // Récupérer tous les fichiers chargés pour identifier les autoloaders
-        $includedFiles = get_included_files();
-        $autoloadersFound = [];
-        
-        foreach ($includedFiles as $file) {
-            // Autoloader Composer principal
-            if (str_ends_with($file, '/vendor/autoload.php')) {
-                $autoloadersFound[] = $file;
-                $context[] = sprintf("require_once %s;", var_export($file, true));
+        return is_scalar($value) || is_null($value) || 
+               (is_array($value) && $this->isArrayVarExportable($value));
+    }
+    
+    private function isArrayVarExportable(array $array): bool
+    {
+        foreach ($array as $item) {
+            if (!is_scalar($item) && !is_null($item) && !is_array($item)) {
+                return false;
             }
-            // Autoloaders spécifiques aux frameworks
-            elseif (str_contains($file, '/bootstrap/autoload.php') || // Laravel legacy
-                    str_contains($file, '/config/bootstrap.php') ||   // Symfony
-                    str_contains($file, '/wp-config.php') ||           // WordPress
-                    str_contains($file, '/wp-load.php')) {            // WordPress
-                $context[] = sprintf("if (file_exists(%s)) require_once %s;", 
-                    var_export($file, true), 
-                    var_export($file, true)
-                );
+            if (is_array($item) && !$this->isArrayVarExportable($item)) {
+                return false;
             }
         }
-        
-        // Si aucun autoloader trouvé dans les fichiers inclus, chercher dans les chemins courants
-        if (empty($autoloadersFound)) {
-            $possibleAutoloaders = [
-                getcwd() . '/vendor/autoload.php',
-                dirname(getcwd()) . '/vendor/autoload.php',
-                dirname(dirname(getcwd())) . '/vendor/autoload.php'
-            ];
-            
-            foreach ($possibleAutoloaders as $autoloader) {
-                if (file_exists($autoloader)) {
-                    $context[] = sprintf("if (file_exists(%s)) require_once %s;", 
-                        var_export($autoloader, true), 
-                        var_export($autoloader, true)
-                    );
-                    break;
-                }
-            }
-        }
-        
-        // Capturer les autoloaders PSR-4 enregistrés
-        $registeredAutoloaders = spl_autoload_functions();
-        if (!empty($registeredAutoloaders)) {
-            $context[] = "// Note: " . count($registeredAutoloaders) . " autoloader(s) were registered in the original context";
-        }
+        return true;
     }
     
     private function captureEnvironmentVariables(array &$context): void
@@ -592,54 +545,184 @@ EOFPHP;
 
     private function executeWithProfiling(string $code, string $filterLevel, OutputInterface $output, bool $debug = false): array
     {
-        // Préparer le code avec contexte et XHProf
-        $fullCode = $this->prepareCodeWithContext($code, $debug);
-        
         if ($debug) {
-            $output->writeln('<comment>[DEBUG] Code généré pour le profilage:</comment>');
-            $output->writeln('<info>' . substr($fullCode, 0, 500) . '...</info>');
+            $output->writeln('<comment>[DEBUG] Exécution du profilage in-process avec héritage du contexte...</comment>');
         }
         
-        // Exécuter avec PHP -r pour éviter le bruit de PsySH
-        $process = new \Symfony\Component\Process\Process([
-            PHP_BINARY,
-            '-d', 'memory_limit=-1',
-            '-r', $fullCode
-        ]);
+        $shell = $this->getShell();
         
-        $process->run();
+        // Utiliser une approche similaire à ExecutionClosure mais avec profilage
+        try {
+            // Commencer le profilage XHProf avec tous les flags pour capturer plus de détails
+            $flags = XHPROF_FLAGS_CPU + XHPROF_FLAGS_MEMORY;
+            if (defined('XHPROF_FLAGS_NO_BUILTINS')) {
+                // Ne pas ignorer les fonctions intégrées pour voir les appels à l'intérieur d'eval
+                // $flags += XHPROF_FLAGS_NO_BUILTINS; // Désactivé pour voir plus de détails
+            }
+            
+            if ($debug) {
+                $output->writeln('<comment>[DEBUG] Démarrage XHProf avec flags: ' . $flags . '</comment>');
+            }
+            
+            xhprof_enable($flags);
+            
+            // Exécuter le code dans le contexte du shell (similaire à ExecutionClosure)
+            $result = $this->executeInShellContext($shell, $code);
+            
+            // Arrêter le profilage
+            $profileData = xhprof_disable();
+            
+            return [
+                'success' => true,
+                'data' => $profileData
+            ];
+            
+        } catch (\Throwable $e) {
+            // S'assurer d'arrêter le profilage même en cas d'erreur
+            @xhprof_disable();
+            throw new \RuntimeException('Erreur lors du profilage: ' . $e->getMessage());
+        }
+    }
+    
+    /**
+     * Exécute le code dans le contexte du shell avec traçage amélioré
+     */
+    private function executeInShellContext($shell, string $code)
+    {
+        // Restaurer les variables de scope (similaire à ExecutionClosure::execute)
+        extract($shell->getScopeVariables(false));
         
-        // Vérifier si le process s'est bien exécuté
-        if (!$process->isSuccessful()) {
-            throw new \RuntimeException('Erreur lors de l\'exécution du profiling: ' . $process->getErrorOutput());
+        // Nettoyer le code (s'assurer qu'il se termine par un point-virgule)
+        $code = rtrim($code);
+        if (!str_ends_with($code, ';')) {
+            $code = $code . ';';
         }
         
-        // Récupérer le nom du fichier de données depuis stderr
-        $errorOutput = $process->getErrorOutput();
-        if (preg_match('/PSYSH_PROFILE_FILE:(.+)/', $errorOutput, $matches)) {
-            $profileFile = trim($matches[1]);
-        } else {
-            throw new \RuntimeException('Impossible de trouver le fichier de profilage dans la sortie: ' . $errorOutput);
+        // Pour permettre à XHProf de tracer les appels à l'intérieur du code,
+        // nous créons un fichier temporaire au lieu d'utiliser eval() directement
+        try {
+            return $this->executeWithTemporaryFile($shell, $code);
+        } catch (\Throwable $e) {
+            // Si le fichier temporaire échoue, utiliser eval() comme fallback
+            return eval($code);
+        }
+    }
+    
+    /**
+     * Exécute le code via un fichier temporaire pour améliorer le traçage XHProf
+     */
+    private function executeWithTemporaryFile($shell, string $code)
+    {
+        // Créer un fichier temporaire pour le code
+        $tmpFile = tempnam(sys_get_temp_dir(), 'psysh_profile_');
+        $phpFile = $tmpFile . '.php';
+        
+        try {
+            // Générer le contenu PHP complet avec le contexte
+            $vars = $shell->getScopeVariables(false);
+            $phpContent = $this->generatePhpFileContent($vars, $code);
+            
+            // Écrire le code dans le fichier temporaire
+            file_put_contents($phpFile, $phpContent);
+            
+            // Capturer la sortie et le résultat
+            $bufferLevel = ob_get_level();
+            ob_start();
+            $result = null;
+            
+            try {
+                // Inclure le fichier (cela permettra à XHProf de tracer les appels internes)
+                $result = include $phpFile;
+                
+                // Récupérer toute sortie générée
+                $output = ob_get_clean();
+                if (!empty($output)) {
+                    echo $output;
+                }
+            } catch (\Throwable $e) {
+                // S'assurer de nettoyer le buffer même en cas d'erreur
+                while (ob_get_level() > $bufferLevel) {
+                    ob_end_clean();
+                }
+                throw $e;
+            }
+            
+            return $result;
+            
+        } finally {
+            // Nettoyer les fichiers temporaires
+            @unlink($phpFile);
+            @unlink($tmpFile);
+            
+            // Nettoyer les variables globales temporaires
+            unset($GLOBALS['__psysh_complex_vars']);
+        }
+    }
+    
+    /**
+     * Génère le contenu PHP complet avec le contexte des variables
+     */
+    private function generatePhpFileContent(array $vars, string $code): string
+    {
+        $content = "<?php\n";
+        $content .= "// Fichier temporaire généré pour le profilage PsySH\n\n";
+        
+        // Restaurer les variables de scope
+        foreach ($vars as $name => $value) {
+            // Exclure les variables spéciales
+            if (in_array($name, ['_', '_e', '__out', '__class', '__namespace'])) {
+                continue;
+            }
+            
+            try {
+                if (is_scalar($value) || is_null($value)) {
+                    $content .= sprintf('$%s = %s;', $name, var_export($value, true)) . "\n";
+                } elseif (is_array($value) && $this->isSimpleArray($value)) {
+                    $content .= sprintf('$%s = %s;', $name, var_export($value, true)) . "\n";
+                } elseif ($value instanceof \Closure) {
+                    // Pour les closures, nous devons les recréer - c'est complexe mais possible
+                    $content .= sprintf('// Closure $%s sera disponible via extract() dans le scope global', $name) . "\n";
+                    // On utilisera extract() pour ces cas complexes
+                    $GLOBALS['__psysh_complex_vars'][$name] = $value;
+                } else {
+                    // Autres objets - on les met dans GLOBALS temporairement
+                    $GLOBALS['__psysh_complex_vars'][$name] = $value;
+                    $content .= sprintf('// Complex variable $%s disponible via extract()', $name) . "\n";
+                }
+            } catch (\Throwable $e) {
+                $content .= sprintf('// Variable $%s could not be exported: %s', $name, $e->getMessage()) . "\n";
+            }
         }
         
-        // Vérifier que le fichier existe
-        if (!file_exists($profileFile)) {
-            throw new \RuntimeException('Le fichier de profilage n\'a pas été créé: "' . $profileFile . '"');
+        // Extraire les variables complexes depuis GLOBALS
+        if (!empty($GLOBALS['__psysh_complex_vars'])) {
+            $content .= "\n// Restaurer les variables complexes\n";
+            $content .= "extract(\$GLOBALS['__psysh_complex_vars']);\n";
         }
         
-        // Lire les données XHProf
-        $profileData = unserialize(file_get_contents($profileFile));
-        if ($profileData === false) {
-            throw new \RuntimeException('Impossible de lire les données de profilage');
+        $content .= "\n// Code utilisateur\n";
+        $content .= "return ($code);\n";
+        
+        return $content;
+    }
+    
+    /**
+     * Vérifie si un tableau peut être exporté avec var_export
+     */
+    private function isSimpleArray(array $array): bool
+    {
+        foreach ($array as $item) {
+            if (!is_scalar($item) && !is_null($item)) {
+                if (is_array($item)) {
+                    if (!$this->isSimpleArray($item)) {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+            }
         }
-        
-        // Nettoyer le fichier temporaire
-        unlink($profileFile);
-        
-        return [
-            'success' => true,
-            'data' => $profileData
-        ];
+        return true;
     }
 
     private function executeWithXdebugTracing(string $code, string $filterLevel, OutputInterface $output, bool $debug = false): array
