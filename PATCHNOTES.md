@@ -1,6 +1,67 @@
 # PsySH ProfileCommand - Patch Notes
 
-## Version 1.0.2 - 2025-07-30
+## Version 1.1.0 - 2025-07-30
+
+### Major Enhancements
+
+#### Complete Context Preservation for ProfileCommand
+- **Feature**: ProfileCommand now captures and preserves the complete execution context from PsySH shell, including classes, functions, constants, and external projects loaded via `psysh autoload`.
+- **Implementation**:
+  - Added execution history tracking to `Shell.php` with `$executedCodeHistory` property
+  - Automatic interception and storage of all code definitions (classes, functions, constants, namespaces)
+  - Dynamic context reconstruction without hardcoded logic
+  - Support for external PHP projects (Symfony, Laravel, WordPress) via AutoloadCommand integration
+  - Process isolation for clean profiling while maintaining complete context
+
+#### Enhanced ProfileCommand Features
+- **Human-Readable Formatting**: Adaptive time and memory display
+  - Time: μs → ms → s → min (automatically scaled)
+  - Memory: B → KB → MB → GB (automatically scaled)
+  - Automatic removal of trailing zeros
+- **Improved Context Capture**:
+  - Composer autoloader detection and restoration
+  - Environment variable preservation (APP_ENV, DATABASE_URL, etc.)
+  - Framework object detection and handling
+  - Shell-defined classes, functions, and constants
+  - User-defined constants capture
+- **Better Error Handling**: Comprehensive fallbacks and error recovery
+
+#### Files Modified
+- `src/Shell.php`:
+  - Added `$executedCodeHistory` property
+  - Modified `execute()` to track code definitions
+  - Added `addToExecutedCodeHistory()`, `getExecutedCodeHistory()`, `getExecutedCodeAsString()`
+  - Added intelligent filtering for definitions vs execution code
+- `src/Command/ProfileCommand.php`:
+  - Complete rewrite of context serialization system
+  - Added `formatTime()` and `formatMemory()` for adaptive display
+  - Enhanced autoloader and environment variable capture
+  - Removed hardcoded class reconstruction logic
+  - Improved process isolation with context preservation
+
+#### Example Usage
+```php
+// Define a class in PsySH shell:
+> class BinaryCalculator {
+.     public function toBinary($num) {
+.         return $this->convert($num);
+.     }
+.     private function convert($num) {
+.         return decbin($num);
+.     }
+. }
+
+// Profile it directly - context is automatically preserved:
+> profile ($calc = new BinaryCalculator())->toBinary(10);
+Profiling results (user code only):
++------------------+-------+--------+--------+--------+----------+
+| Function         | Calls | Time   | Time % | Memory | Memory % |
++------------------+-------+--------+--------+--------+----------+
+| BinaryCalculator | 1     | 15 μs  | 45.2%  | 1.2 KB | 35.8%   |
++------------------+-------+--------+--------+--------+----------+
+
+Total execution: Time: 33 μs, Memory: 3.4 KB
+```
 
 ### Bug Fixes
 
@@ -16,18 +77,25 @@
   - Modified `handleMultiLineCodeArgument()` in `Shell.php` to properly extract PHP code by removing the command name prefix
   - The code extraction now correctly identifies `"if (true) {"` as incomplete PHP code requiring multi-line input
 
-#### Files Modified
-- `src/Input/ShellInput.php` - Added `hasCodeArgument()` method
-- `src/Shell.php` - Fixed code extraction logic in `handleMultiLineCodeArgument()`
+#### Updated Test Compatibility
+- Modified `ProfileCommandTest.php` to support new adaptive formatting
+- Updated assertions to work with flexible time/memory units
+- All existing tests pass with enhanced functionality
 
 #### Example Usage
 ```php
-// This now works correctly with multi-line input:
+// Multi-line commands now work correctly:
 > timeit if (true) {
 . echo "hello";
 . }
 Command took 0.000123 seconds to complete.
+
+// ProfileCommand with complete context preservation:
+> profile ($calc = new BinaryCalculator())->toBinary(10);
+// Works perfectly with shell-defined classes!
 ```
+
+## Version 1.0.2 - 2025-07-30 (Previous)
 
 ## Version 1.0.1 - 2025-07-30
 

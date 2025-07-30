@@ -57,7 +57,7 @@ HELP
         $depth = (int) $input->getOption('depth');
         $watchedVars = $input->getOption('watch');
 
-        $context = $this->getApplication()->getContainer()->getContext();
+        $context = $this->getApplication()->getShell()->getContext();
 
         $output->writeln('<info>Exploring context (depth=' . $depth . '):</info>');
 

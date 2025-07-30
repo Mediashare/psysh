@@ -35,4 +35,4 @@ PsySH is a runtime developer console, interactive debugger and [REPL](https://en
 
 ### [🔌 Integrations](https://github.com/bobthecow/psysh/wiki/Integrations)
 
-### [PROFILING](https://github.com/bobthecow/psysh/wiki/Profiling)
+### [PROFILING](PROFILING.md)

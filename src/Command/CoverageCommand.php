@@ -214,7 +214,7 @@ HELP
      */
     private function displayCoverageTable(array $coverageData, OutputInterface $output)
     {
-        $output->writeln('<info>Code Coverage Report:</info>');
+        $output->writeln('<info>Code Coverage Summary:</info>');
         $output->writeln('');
 
         // Calculate summary statistics

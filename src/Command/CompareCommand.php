@@ -61,6 +61,7 @@ HELP
         $resultB = $this->runProfileCommand($codeB);
 
         if ($resultA === null || $resultB === null) {
+            $output->writeln('\n<info>Performance Comparison:</info>');
             $output->writeln('<error>Failed to profile one or both code snippets. Comparison aborted.</error>');
 
             return self::FAILURE;

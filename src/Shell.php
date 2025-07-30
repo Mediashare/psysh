@@ -77,6 +77,8 @@ class Shell extends Application
     private bool $lastExecSuccess = true;
     private bool $nonInteractive = false;
     private ?int $errorReporting = null;
+    /** @var array Historique du code exécuté dans le shell */
+    private array $executedCodeHistory = [];
 
     /**
      * Create a new Psy Shell.
@@ -1502,6 +1504,9 @@ class Shell extends Application
      */
     public function execute(string $code, bool $throwExceptions = false)
     {
+        // Stocker le code exécuté dans l'historique pour ProfileCommand
+        $this->addToExecutedCodeHistory($code);
+        
         $this->setCode($code, true);
         $closure = new ExecutionClosure($this);
 
@@ -1776,5 +1781,75 @@ class Shell extends Application
         if ($message !== null && $message !== '') {
             $this->output->writeln($message);
         }
+    }
+
+    /**
+     * Ajouter du code à l'historique d'exécution
+     */
+    private function addToExecutedCodeHistory(string $code): void
+    {
+        // Nettoyer le code et ne stocker que les définitions importantes
+        $trimmedCode = trim($code);
+        
+        // Stocker seulement les définitions de classes, interfaces, traits, fonctions, constantes
+        if ($this->isDefinitionCode($trimmedCode)) {
+            $this->executedCodeHistory[] = [
+                'code' => $trimmedCode,
+                'timestamp' => microtime(true),
+                'type' => $this->getCodeType($trimmedCode)
+            ];
+            
+            // Limiter l'historique à 100 entrées pour éviter une consommation excessive de mémoire
+            if (count($this->executedCodeHistory) > 100) {
+                array_shift($this->executedCodeHistory);
+            }
+        }
+    }
+
+    /**
+     * Vérifier si le code contient des définitions importantes
+     */
+    private function isDefinitionCode(string $code): bool
+    {
+        return preg_match('/^\s*(class|interface|trait|function|namespace|const|define)\s+/i', $code) === 1;
+    }
+
+    /**
+     * Déterminer le type de code
+     */
+    private function getCodeType(string $code): string
+    {
+        if (preg_match('/^\s*class\s+/i', $code)) return 'class';
+        if (preg_match('/^\s*interface\s+/i', $code)) return 'interface';
+        if (preg_match('/^\s*trait\s+/i', $code)) return 'trait';
+        if (preg_match('/^\s*function\s+/i', $code)) return 'function';
+        if (preg_match('/^\s*namespace\s+/i', $code)) return 'namespace';
+        if (preg_match('/^\s*(const|define)\s+/i', $code)) return 'constant';
+        return 'other';
+    }
+
+    /**
+     * Récupérer l'historique du code exécuté
+     */
+    public function getExecutedCodeHistory(): array
+    {
+        return $this->executedCodeHistory;
+    }
+
+    /**
+     * Récupérer tout le code exécuté sous forme de chaîne
+     */
+    public function getExecutedCodeAsString(): string
+    {
+        if (empty($this->executedCodeHistory)) {
+            return '';
+        }
+
+        $codeBlocks = [];
+        foreach ($this->executedCodeHistory as $entry) {
+            $codeBlocks[] = $entry['code'];
+        }
+
+        return implode("\n\n", $codeBlocks);
     }
 }

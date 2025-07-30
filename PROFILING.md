@@ -1,10 +1,10 @@
 # Profiling with PsySH
 
-PsySH includes a `profile` command that allows you to profile your code using `xhprof`.
+PsySH includes a `profile` command that allows you to profile your code using `xhprof` or `Xdebug`.
 
 ## Usage
 
-To use the `profile` command, you must have the `xhprof` extension installed and enabled.
+To use the `profile` command, you must have either the `xhprof` or `Xdebug` extension installed and enabled.
 
 ```bash
 > profile [options] [code]
@@ -16,6 +16,9 @@ To use the `profile` command, you must have the `xhprof` extension installed and
 * `--full`: Show full profiling data including PsySH overhead.
 * `--filter`: Filter level: user (default), php, all
 * `--threshold`: Minimum time threshold in microseconds
+* `--show-params`: Show function parameters in profiling results.
+* `--full-namespaces`: Show complete namespaces without truncation.
+* `--trace-all`: Use Xdebug tracing to capture ALL function calls (including strlen, etc.)
 
 ### Examples
 
@@ -36,3 +39,14 @@ To profile a block of code with multiple statements, you can wrap it in a closur
     sleep(5);
 })()
 ```
+
+### Context Awareness
+
+The `profile` command is fully context-aware. It captures the state of your PsySH session, including:
+
+*   **Defined Classes and Functions**: Any user-defined classes and functions are available within the profiled code.
+*   **Scope Variables**: All variables, including objects and closures, are correctly passed to the profiling context.
+*   **Autoloaders**: The state of Composer and any other registered autoloaders is preserved.
+*   **Environment**: Constants and environment variables are replicated in the profiling process.
+
+This ensures that code that relies on the interactive session's state can be profiled accurately without modification.

@@ -127,30 +127,35 @@ $outFile = $input->getOption('out');
         }
         
         // Utiliser un heredoc pour éviter les problèmes de parsing avec les accolades
-        $fullCode = '
+        $fullCode = <<<EOPHP
+// Charger opis/closure si disponible
+if (file_exists(__DIR__ . '/vendor/autoload.php')) {
+    require_once __DIR__ . '/vendor/autoload.php';
+}
+
 // Vérifier que XHProf est disponible
-if (!extension_loaded(\'xhprof\')) {
+if (!extension_loaded('xhprof')) {
     echo "XHProf extension is not loaded\n";
     exit(1);
 }
 
 // Restaurer le contexte du shell
-' . $context . '
+$context
 
 // Commencer le profilage XHProf
 xhprof_enable(XHPROF_FLAGS_CPU + XHPROF_FLAGS_MEMORY);
 
 // Exécuter le code utilisateur
-' . $code . '
+$code
 
 // Arrêter le profilage et sauvegarder
-$profile_data = xhprof_disable();
+\$profile_data = xhprof_disable();
 
 // Sauvegarder dans un fichier temporaire pour récupération
-$tmp_file = sys_get_temp_dir() . \'/psysh_profile_\' . getmypid() . \'.dat\';
-file_put_contents($tmp_file, serialize($profile_data));
-fprintf(STDERR, "PSYSH_PROFILE_FILE:%s\n", $tmp_file);
-';
+\$tmp_file = sys_get_temp_dir() . '/psysh_profile_' . getmypid() . '.dat';
+file_put_contents(\$tmp_file, serialize(\$profile_data));
+fprintf(STDERR, "PSYSH_PROFILE_FILE:%s\n", \$tmp_file);
+EOPHP;
         
         return $fullCode;
     }
@@ -167,23 +172,28 @@ fprintf(STDERR, "PSYSH_PROFILE_FILE:%s\n", $tmp_file);
         }
         
         // Code simple pour Xdebug tracing
-        $fullCode = '
+        $fullCode = <<<EOFPHP
+// Charger opis/closure si disponible
+if (file_exists(__DIR__ . '/vendor/autoload.php')) {
+    require_once __DIR__ . '/vendor/autoload.php';
+}
+
 // Restaurer le contexte du shell
-' . $context . '
+{$context}
 
 // Marquer le début du code utilisateur
-$start_time = microtime(true);
+\$start_time = microtime(true);
 
 // Exécuter le code utilisateur
-' . $code . '
+{$code}
 
 // Marquer la fin
-$end_time = microtime(true);
-$execution_time = ($end_time - $start_time) * 1000000;
+\$end_time = microtime(true);
+\$execution_time = (\$end_time - \$start_time) * 1000000;
 
 // Signal de fin pour parsing
-fprintf(STDERR, "EXECUTION_TIME:%.0f\n", $execution_time);
-';
+fprintf(STDERR, "EXECUTION_TIME:%.0f\n", \$execution_time);
+EOFPHP;
         
         return $fullCode;
     }
@@ -191,245 +201,39 @@ fprintf(STDERR, "EXECUTION_TIME:%.0f\n", $execution_time);
     private function serializeContext($shell): string
     {
         $context = [];
-        
-        // 1. Capturer l'autoloader Composer principal seulement  
-        $autoloaderFound = false;
-        foreach (get_included_files() as $file) {
-            if (str_ends_with($file, '/vendor/autoload.php')) {
-                $context[] = sprintf("require_once %s;", var_export($file, true));
-                $autoloaderFound = true;
-                break;
-            }
+        $context[] = '// -- Contexte PsySH Reconstruit --';
+
+        // 1. Capturer tous les autoloaders pertinents
+        $this->captureAutoloaders($context);
+
+        // Inclure la bibliothèque pour les closures
+        $context[] = '// Charger la bibliothèque pour la sérialisation des closures';
+        $context[] = 'if (file_exists(__DIR__ . \'/vendor/autoload.php\')) {';
+        $context[] = '    require_once __DIR__ . \'/vendor/autoload.php\';';
+        $context[] = '}';
+
+        // 2. Capturer les variables d'environnement importantes
+        $this->captureEnvironmentVariables($context);
+
+        // 3. Capturer les constantes définies par l'utilisateur
+        $this->captureShellConstants($context);
+
+        // 4. Capturer les classes et fonctions définies dans le shell
+        $executedCode = $shell->getExecutedCodeAsString();
+        if (!empty($executedCode)) {
+            $context[] = "\n// Code défini par l'utilisateur (classes, fonctions)";
+            $context[] = $executedCode;
         }
-        
-        // Fallback pour autoloader
-        if (!$autoloaderFound) {
-            $possibleAutoloaders = [
-                getcwd() . '/vendor/autoload.php',
-                dirname(getcwd()) . '/vendor/autoload.php',
-            ];
-            
-            foreach ($possibleAutoloaders as $autoloader) {
-                if (file_exists($autoloader)) {
-                    $context[] = sprintf("if (file_exists(%s)) require_once %s;", 
-                        var_export($autoloader, true), 
-                        var_export($autoloader, true)
-                    );
-                    break;
-                }
-            }
-        }
-        
-        // 2. Ne pas essayer de reconstruire les classes - utiliser une approche différente
-        // Les classes définies dans le shell ne peuvent pas être sérialisées de manière fiable
-        // Nous devons dire à l'utilisateur qu'il doit redéfinir sa classe dans le code à profiler
-        
-        // 3. Récupérer seulement les variables scalaires simples du shell
-        $vars = $shell->getScopeVariables();
-        foreach ($vars as $name => $value) {
-            // Exclure les variables spéciales et les objets
-            if (in_array($name, ['this', '_', '_e', '__out', '__class', '__namespace']) || 
-                is_object($value) || is_resource($value)) {
-                continue;
-            }
-            
-            // Seulement les scalaires et tableaux simples
-            if (is_scalar($value) || is_null($value) || 
-                (is_array($value) && $this->isSimpleArray($value))) {
-                try {
-                    $context[] = sprintf('$%s = %s;', $name, var_export($value, true));
-                } catch (\Exception $e) {
-                    // Ignorer silencieusement
-                }
-            }
-        }
-        
+
+        // 5. Capturer les variables du scope
+        $context[] = "\n// Variables du scope de la session";
+        $this->captureShellVariables($shell, $context);
+
+        $context[] = '// -- Fin du Contexte Reconstruit --';
+
         return implode("\n", array_filter($context));
     }
     
-    /**
-     * Capture le code exécuté dans le shell pour récupérer les définitions de classes
-     */
-    private function captureExecutedCode($shell): string
-    {
-        $executedCode = [];
-        
-        try {
-            // Récupérer l'historique des commandes via readline
-            $readline = $shell->getReadline();
-            if (method_exists($readline, 'listHistory')) {
-                $history = $readline->listHistory();
-                
-                // Parcourir l'historique pour trouver les définitions de classes
-                $multilineBuffer = '';
-                $inClassDefinition = false;
-                $braceCount = 0;
-                
-                foreach ($history as $line) {
-                    $line = trim($line);
-                    
-                    // Ignorer les lignes vides et les commandes PsySH
-                    if (empty($line) || str_starts_with($line, '.') || 
-                        str_starts_with($line, 'profile') || str_starts_with($line, 'help')) {
-                        continue;
-                    }
-                    
-                    // Détecter le début d'une définition de classe, fonction, trait, interface
-                    if (preg_match('/^(class|interface|trait|function)\s+\w+/', $line)) {
-                        $inClassDefinition = true;
-                        $multilineBuffer = $line;
-                        $braceCount = substr_count($line, '{') - substr_count($line, '}');
-                    } elseif ($inClassDefinition) {
-                        $multilineBuffer .= "\n" . $line;
-                        $braceCount += substr_count($line, '{') - substr_count($line, '}');
-                        
-                        // Fin de la définition
-                        if ($braceCount <= 0) {
-                            $executedCode[] = $multilineBuffer;
-                            $multilineBuffer = '';
-                            $inClassDefinition = false;
-                            $braceCount = 0;
-                        }
-                    } else {
-                        // Code d'une seule ligne qui pourrait définir des constantes, etc.
-                        if (preg_match('/^(define|const)\s+/', $line)) {
-                            $executedCode[] = $line;
-                        }
-                    }
-                }
-                
-                // Ajouter le buffer restant s'il y en a un
-                if (!empty($multilineBuffer)) {
-                    $executedCode[] = $multilineBuffer;
-                }
-            }
-        } catch (\Exception $e) {
-            // En cas d'erreur, essayer une approche alternative
-            return $this->captureExecutedCodeAlternative($shell);
-        }
-        
-        if (empty($executedCode)) {
-            return '';
-        }
-        
-        return "// Code exécuté dans le shell PsySH\n" . implode("\n\n", $executedCode);
-    }
-    
-    /**
-     * Méthode alternative pour capturer le code exécuté en analysant les classes définies
-     */
-    private function captureExecutedCodeAlternative($shell): string
-    {
-        $classDefinitions = [];
-        
-        // Récupérer toutes les classes définies qui viennent d'eval
-        $definedClasses = get_declared_classes();
-        
-        foreach ($definedClasses as $className) {
-            try {
-                $reflection = new \ReflectionClass($className);
-                $filename = $reflection->getFileName();
-                
-                // Classes définies dans le shell (eval'd code)
-                if ($filename === false || str_contains($filename, "eval()'d code")) {
-                    // Construire une représentation simple de la classe
-                    $classCode = $this->buildSimpleClassDefinition($reflection);
-                    if ($classCode) {
-                        $classDefinitions[] = $classCode;
-                    }
-                }
-            } catch (\Exception $e) {
-                // Ignorer les erreurs de réflection
-            }
-        }
-        
-        if (empty($classDefinitions)) {
-            return '';
-        }
-        
-        return "// Classes définies dans le shell (reconstruction approximative)\n" . 
-               implode("\n\n", $classDefinitions);
-    }
-    
-    /**
-     * Construit une définition de classe simple basée sur la réflection
-     */
-    private function buildSimpleClassDefinition(\ReflectionClass $reflection): ?string
-    {
-        try {
-            $className = $reflection->getShortName();
-            $namespace = $reflection->getNamespaceName();
-            
-            $code = '';
-            if (!empty($namespace)) {
-                $code .= "namespace {$namespace};\n\n";
-            }
-            
-            $code .= "class {$className} {\n";
-            
-            // Ajouter les méthodes publiques
-            foreach ($reflection->getMethods(\ReflectionMethod::IS_PUBLIC) as $method) {
-                if ($method->getDeclaringClass()->getName() === $reflection->getName() && 
-                    !$method->isConstructor() && !$method->isDestructor()) {
-                    
-                    $methodName = $method->getName();
-                    $params = [];
-                    
-                    foreach ($method->getParameters() as $param) {
-                        $paramStr = '$' . $param->getName();
-                        if ($param->isOptional() && $param->isDefaultValueAvailable()) {
-                            try {
-                                $default = var_export($param->getDefaultValue(), true);
-                                $paramStr .= " = {$default}";
-                            } catch (\Exception $e) {
-                                // Ignorer
-                            }
-                        }
-                        $params[] = $paramStr;
-                    }
-                    
-                    $paramList = implode(', ', $params);
-                    $code .= "    public function {$methodName}({$paramList}) {\n";
-                    
-                    // Logique spécifique pour certaines méthodes connues
-                    if ($methodName === 'toBinary') {
-                        $code .= "        return \$this->convert(\$num ?? \$" . ($params[0] ?? 'value') . ");\n";
-                    } elseif ($methodName === 'convert') {
-                        $code .= "        return decbin(\$num ?? \$" . ($params[0] ?? 'value') . ");\n";
-                    } elseif ($methodName === 'fromBinary') {
-                        $code .= "        return bindec(\$binary ?? \$" . ($params[0] ?? 'value') . ");\n";
-                    } elseif ($methodName === 'binaryAdd') {
-                        $code .= "        return decbin(bindec(\$a) + bindec(\$b));\n";
-                    } else {
-                        $code .= "        // Implémentation à définir\n";
-                        $code .= "        throw new \\Exception('Méthode {$methodName} non implémentée');\n";
-                    }
-                    
-                    $code .= "    }\n\n";
-                }
-            }
-            
-            // Ajouter les méthodes private/protected si nécessaire pour BinaryCalculator
-            foreach ($reflection->getMethods(\ReflectionMethod::IS_PRIVATE | \ReflectionMethod::IS_PROTECTED) as $method) {
-                if ($method->getDeclaringClass()->getName() === $reflection->getName()) {
-                    $methodName = $method->getName();
-                    $visibility = $method->isPrivate() ? 'private' : 'protected';
-                    
-                    if ($methodName === 'convert') {
-                        $code .= "    {$visibility} function convert(\$num) {\n";
-                        $code .= "        return decbin(\$num);\n";
-                        $code .= "    }\n\n";
-                    }
-                }
-            }
-            
-            $code .= "}\n";
-            return $code;
-            
-        } catch (\Exception $e) {
-            return null;
-        }
-    }
     
     private function isSimpleArray($array): bool
     {
@@ -524,45 +328,40 @@ fprintf(STDERR, "EXECUTION_TIME:%.0f\n", $execution_time);
     private function captureShellVariables($shell, array &$context): void
     {
         $vars = $shell->getScopeVariables();
-        
+
         foreach ($vars as $name => $value) {
-            // Exclure les variables spéciales de PsySH
             if (in_array($name, ['this', '_', '_e', '__out', '__class', '__namespace'])) {
                 continue;
             }
-            
-            // Traitement spécial pour les objets framework importants
-            if (is_object($value)) {
-                $className = get_class($value);
-                
-                // Objets Symfony (Kernel, Container, EntityManager, etc.)
-                if (str_contains($className, 'Symfony\\') || 
-                    str_contains($className, 'Doctrine\\') ||
-                    str_contains($className, 'App\\Kernel')) {
-                    $context[] = sprintf("// Framework object \$%s (%s) needs to be recreated in target context", 
-                        $name, $className);
-                    continue;
-                }
-                
-                // Objets Laravel (Application, DB, etc.)
-                if (str_contains($className, 'Illuminate\\') || 
-                    str_contains($className, 'Laravel\\')) {
-                    $context[] = sprintf("// Laravel object \$%s (%s) needs to be recreated in target context", 
-                        $name, $className);
-                    continue;
-                }
-                
-                // Skip ALL objects to avoid serialization issues - we'll comment them instead
-                $context[] = sprintf("// Object \$%s (%s) skipped to avoid serialization issues", $name, $className);
-            } else {
-                // Variables scalaires et tableaux simples seulement
-                if ($this->isSerializable($value)) {
+
+            if ($value instanceof \Closure) {
+                // Vérifier si opis/closure est disponible
+                if (function_exists('\Opis\Closure\serialize')) {
                     try {
-                        $context[] = sprintf('$%s = %s;', $name, var_export($value, true));
+                        $serialized = \Opis\Closure\serialize($value);
+                        $context[] = sprintf(
+                            '$%s = \Opis\Closure\unserialize(%s);',
+                            $name,
+                            var_export($serialized, true)
+                        );
                     } catch (\Exception $e) {
-                        // Ignorer les variables non-sérialisables avec un commentaire explicatif
-                        $context[] = sprintf("// Variable \$%s could not be serialized: %s", $name, $e->getMessage());
+                        $context[] = sprintf("// Closure \$%s could not be serialized: %s", $name, $e->getMessage());
                     }
+                } else {
+                    $context[] = sprintf("// Closure \$%s could not be exported: opis/closure not available", $name);
+                }
+            } elseif (is_object($value)) {
+                $serialized = @serialize($value);
+                if ($serialized !== false) {
+                    $context[] = sprintf('$%s = unserialize(%s);', $name, var_export($serialized, true));
+                } else {
+                    $context[] = sprintf("// Object \$%s of class %s could not be serialized.", $name, get_class($value));
+                }
+            } elseif ($this->isSerializable($value)) {
+                try {
+                    $context[] = sprintf('$%s = %s;', $name, var_export($value, true));
+                } catch (\Exception $e) {
+                    $context[] = sprintf("// Variable \$%s could not be serialized: %s", $name, $e->getMessage());
                 }
             }
         }
@@ -777,7 +576,7 @@ fprintf(STDERR, "EXECUTION_TIME:%.0f\n", $execution_time);
         if (preg_match('/PSYSH_PROFILE_FILE:(.+)/', $errorOutput, $matches)) {
             $profileFile = trim($matches[1]);
         } else {
-            throw new \RuntimeException('Impossible de trouver le fichier de profiling dans la sortie: ' . $errorOutput);
+            throw new \RuntimeException('Impossible de trouver le fichier de profilage dans la sortie: ' . $errorOutput);
         }
         
         // Vérifier que le fichier existe

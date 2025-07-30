@@ -41,9 +41,9 @@ Psysh is a modular, object-oriented application with a clear separation of conce
   4. Add relevant tests to cover the new transformation logic.
 
 - **Profiling**:
-  1. The `profile` command uses `xhprof` to profile code.
+  1. The `profile` command uses `xhprof` or `Xdebug` to profile code.
   2. The command is located in `src/Command/ProfileCommand.php`.
-  3. The command uses a `CodeCleaner` pass to prepare the code for profiling.
-  4. The command uses a `Process` to execute the code with `xhprof` enabled.
-  5. The command parses the `xhprof` output to display a summary table.
+  3. The command captures the entire PsySH session context (variables, classes, functions, autoloaders) to ensure accurate profiling.
+  4. It uses a `Process` to execute the code in an isolated environment with the reconstructed context.
+  5. The command parses the `xhprof` or `Xdebug` output to display a summary table.
   6. See [PROFILING.md](PROFILING.md) for more details.
