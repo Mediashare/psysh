@@ -585,144 +585,44 @@ EOFPHP;
     }
     
     /**
-     * Exécute le code dans le contexte du shell avec traçage amélioré
+     * Exécute le code directement via le shell PsySH pour un profilage complet
      */
     private function executeInShellContext($shell, string $code)
     {
-        // Restaurer les variables de scope (similaire à ExecutionClosure::execute)
-        extract($shell->getScopeVariables(false));
-        
         // Nettoyer le code (s'assurer qu'il se termine par un point-virgule)
         $code = rtrim($code);
         if (!str_ends_with($code, ';')) {
             $code = $code . ';';
         }
         
-        // Pour permettre à XHProf de tracer les appels à l'intérieur du code,
-        // nous créons un fichier temporaire au lieu d'utiliser eval() directement
         try {
-            return $this->executeWithTemporaryFile($shell, $code);
-        } catch (\Throwable $e) {
-            // Si le fichier temporaire échoue, utiliser eval() comme fallback
-            return eval($code);
+            // Utiliser le mécanisme normal d'exécution de PsySH (Shell::execute)
+            // Cela nous donne le profilage le plus complet possible car le code
+            // passe par le pipeline normal de PsySH (CodeCleaner, ExecutionClosure, etc.)
+            return $shell->execute($code, true);
+        } catch (\Error $e) {
+            // Si Shell::execute échoue (par exemple dans les tests où le shell n'est pas complètement initialisé),
+            // utiliser une approche plus directe similaire à ExecutionClosure
+            if (str_contains($e->getMessage(), 'must not be accessed before initialization')) {
+                return $this->executeWithDirectClosure($shell, $code);
+            }
+            throw $e;
         }
     }
     
     /**
-     * Exécute le code via un fichier temporaire pour améliorer le traçage XHProf
+     * Exécute le code avec une approche directe similaire à ExecutionClosure (pour les tests)
      */
-    private function executeWithTemporaryFile($shell, string $code)
+    private function executeWithDirectClosure($shell, string $code)
     {
-        // Créer un fichier temporaire pour le code
-        $tmpFile = tempnam(sys_get_temp_dir(), 'psysh_profile_');
-        $phpFile = $tmpFile . '.php';
+        // Pour les cas où le shell n'est pas complètement initialisé (tests),
+        // utiliser eval() avec le contexte restauré - c'est notre fallback
         
-        try {
-            // Générer le contenu PHP complet avec le contexte
-            $vars = $shell->getScopeVariables(false);
-            $phpContent = $this->generatePhpFileContent($vars, $code);
-            
-            // Écrire le code dans le fichier temporaire
-            file_put_contents($phpFile, $phpContent);
-            
-            // Capturer la sortie et le résultat
-            $bufferLevel = ob_get_level();
-            ob_start();
-            $result = null;
-            
-            try {
-                // Inclure le fichier (cela permettra à XHProf de tracer les appels internes)
-                $result = include $phpFile;
-                
-                // Récupérer toute sortie générée
-                $output = ob_get_clean();
-                if (!empty($output)) {
-                    echo $output;
-                }
-            } catch (\Throwable $e) {
-                // S'assurer de nettoyer le buffer même en cas d'erreur
-                while (ob_get_level() > $bufferLevel) {
-                    ob_end_clean();
-                }
-                throw $e;
-            }
-            
-            return $result;
-            
-        } finally {
-            // Nettoyer les fichiers temporaires
-            @unlink($phpFile);
-            @unlink($tmpFile);
-            
-            // Nettoyer les variables globales temporaires
-            unset($GLOBALS['__psysh_complex_vars']);
-        }
-    }
-    
-    /**
-     * Génère le contenu PHP complet avec le contexte des variables
-     */
-    private function generatePhpFileContent(array $vars, string $code): string
-    {
-        $content = "<?php\n";
-        $content .= "// Fichier temporaire généré pour le profilage PsySH\n\n";
+        // Restaurer les variables de scope (similaire à ExecutionClosure::execute)
+        extract($shell->getScopeVariables(false));
         
-        // Restaurer les variables de scope
-        foreach ($vars as $name => $value) {
-            // Exclure les variables spéciales
-            if (in_array($name, ['_', '_e', '__out', '__class', '__namespace'])) {
-                continue;
-            }
-            
-            try {
-                if (is_scalar($value) || is_null($value)) {
-                    $content .= sprintf('$%s = %s;', $name, var_export($value, true)) . "\n";
-                } elseif (is_array($value) && $this->isSimpleArray($value)) {
-                    $content .= sprintf('$%s = %s;', $name, var_export($value, true)) . "\n";
-                } elseif ($value instanceof \Closure) {
-                    // Pour les closures, nous devons les recréer - c'est complexe mais possible
-                    $content .= sprintf('// Closure $%s sera disponible via extract() dans le scope global', $name) . "\n";
-                    // On utilisera extract() pour ces cas complexes
-                    $GLOBALS['__psysh_complex_vars'][$name] = $value;
-                } else {
-                    // Autres objets - on les met dans GLOBALS temporairement
-                    $GLOBALS['__psysh_complex_vars'][$name] = $value;
-                    $content .= sprintf('// Complex variable $%s disponible via extract()', $name) . "\n";
-                }
-            } catch (\Throwable $e) {
-                $content .= sprintf('// Variable $%s could not be exported: %s', $name, $e->getMessage()) . "\n";
-            }
-        }
-        
-        // Extraire les variables complexes depuis GLOBALS
-        if (!empty($GLOBALS['__psysh_complex_vars'])) {
-            $content .= "\n// Restaurer les variables complexes\n";
-            $content .= "extract(\$GLOBALS['__psysh_complex_vars']);\n";
-        }
-        
-        $content .= "\n// Code utilisateur\n";
-        $content .= "return ($code);\n";
-        
-        return $content;
-    }
-    
-    /**
-     * Vérifie si un tableau peut être exporté avec var_export
-     */
-    private function isSimpleArray(array $array): bool
-    {
-        foreach ($array as $item) {
-            if (!is_scalar($item) && !is_null($item)) {
-                if (is_array($item)) {
-                    if (!$this->isSimpleArray($item)) {
-                        return false;
-                    }
-                } else {
-                    return false;
-                }
-            }
-        }
-        return true;
+        // Utiliser eval() comme fallback (même si moins détaillé)
+        return eval($code);
     }
 
     private function executeWithXdebugTracing(string $code, string $filterLevel, OutputInterface $output, bool $debug = false): array
