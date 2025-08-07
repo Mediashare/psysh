@@ -19,6 +19,7 @@ To use the `profile` command, you must have either the `xhprof` or `Xdebug` exte
 * `--show-params`: Show function parameters in profiling results.
 * `--full-namespaces`: Show complete namespaces without truncation.
 * `--trace-all`: Use Xdebug tracing to capture ALL function calls (including strlen, etc.)
+* `--debug`: Enable debug mode for the profiler, which provides verbose output for troubleshooting.
 
 ### Examples
 
@@ -40,13 +41,13 @@ To profile a block of code with multiple statements, you can wrap it in a closur
 })()
 ```
 
-### Context Awareness
+### How it Works
 
-The `profile` command is fully context-aware. It captures the state of your PsySH session, including:
+The `profile` command is fully context-aware. It executes the code directly within the current PsySH session by leveraging the shell's own execution engine (`Shell::execute`). This ensures that the profiling context is as accurate as possible, including:
 
 *   **Defined Classes and Functions**: Any user-defined classes and functions are available within the profiled code.
 *   **Scope Variables**: All variables, including objects and closures, are correctly passed to the profiling context.
 *   **Autoloaders**: The state of Composer and any other registered autoloaders is preserved.
 *   **Environment**: Constants and environment variables are replicated in the profiling process.
 
-This ensures that code that relies on the interactive session's state can be profiled accurately without modification.
+This deep integration allows for profiling code that relies on the interactive session's state without any modifications, providing the most realistic performance metrics.

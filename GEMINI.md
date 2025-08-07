@@ -35,7 +35,7 @@ Psysh is a modular, object-oriented application with a clear separation of conce
   4. Add a corresponding test case in `test/Command/`.
 
 - **Modifying Code Parsing**:
-  1. Create a new pass class in `src/CodeCleaner/` that extends `Psy\CodeCleaner\CodeCleanerPass`.
+  1. Create a new pass in `src/CodeCleaner/` that extends `Psy\CodeCleaner\CodeCleanerPass`.
   2. Implement the `NodeVisitor` interface methods (e.g., `leaveNode`) to modify the AST.
   3. Register the new pass in the `CodeCleaner` service.
   4. Add relevant tests to cover the new transformation logic.
@@ -43,7 +43,7 @@ Psysh is a modular, object-oriented application with a clear separation of conce
 - **Profiling**:
   1. The `profile` command uses `xhprof` or `Xdebug` to profile code.
   2. The command is located in `src/Command/ProfileCommand.php`.
-  3. The command captures the entire PsySH session context (variables, classes, functions, autoloaders) to ensure accurate profiling.
-  4. It uses a `Process` to execute the code in an isolated environment with the reconstructed context.
+  3. The command now executes code directly via `Shell::execute`, ensuring the most accurate possible profiling context by using PsySH's own evaluation engine.
+  4. This method preserves the entire session context, including variables, user-defined classes, functions, and autoloaders.
   5. The command parses the `xhprof` or `Xdebug` output to display a summary table.
   6. See [PROFILING.md](PROFILING.md) for more details.

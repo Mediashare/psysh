@@ -1,5 +1,26 @@
 # PsySH ProfileCommand - Patch Notes
 
+## Version 1.2.0 - 2025-08-07
+
+### Major Enhancements
+
+#### Simplified and Robust `profile` Command Execution
+- **Refactoring**: The `profile` command has been refactored to use the shell's own execution engine (`Shell::execute`) instead of a custom implementation that relied on temporary files and manual context recreation.
+- **Benefits**:
+  - **Accuracy**: Profiling now occurs within the exact same execution context as normal PsySH operations, leading to more accurate and reliable performance metrics.
+  - **Simplicity**: Removed over 100 lines of complex, brittle code related to temporary file generation and scope variable serialization.
+  - **Robustness**: The new implementation is more resilient and less prone to errors, especially with complex types like closures and objects.
+- **Fallback Mechanism**: In environments where `Shell::execute` might not be fully available (like certain test scenarios), a fallback to a direct `eval()` with restored scope variables is implemented, ensuring functionality is maintained.
+
+#### New `--debug` option for `profile` command
+- **Feature**: A `--debug` flag has been added to the `profile` command to help with troubleshooting the profiler itself.
+- **Functionality**: When enabled, it provides verbose output about the profiling process, including the generated script and any errors encountered.
+
+#### Files Modified
+- `src/Command/ProfileCommand.php`: Major refactoring of the execution logic to use `Shell::execute`.
+- `PROFILING.md`: Updated to reflect the new execution mechanism and added the `--debug` option.
+- `GEMINI.md`: Updated the profiling section to describe the new implementation.
+
 ## Version 1.1.0 - 2025-07-30
 
 ### Major Enhancements
