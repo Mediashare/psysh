@@ -60,9 +60,9 @@ Psysh is a modular, object-oriented application with a clear separation of conce
       - Positifs: Le code exécuter dans le sous shell psysh contient facilement le même contexte php que le main process psysh. Dans les résultats de profilage il y a bien une cohérence entre les logs de profilage et le code exécuté.
       - Négatifs: Contient des calls de fonction psysh dans le résultat du profilage. Ceux-ci ne devant pas être présent logiquement. Solution possible serait d'avoir un filtrage performant sur les calls à afficher dans le profilage, en vérifiant que l'execution de chaque calls provient bien uniquement du contexte d'execution de CodeArgument.
     - La méthode par sub Process Symfony.
-      - Positifs: à déterminé...
-      - Négatifs: à déterminé...
+      - Positifs: @TODO for AI assistant, make a tests and respond to this question
+      - Négatifs: @TODO for AI assistant, make a tests and respond to this question
     - La méthode fichier php temporaire.
-      - Positifs: à déterminé...
-      - Négatifs: à déterminé...
+      - Positifs: @TODO for AI assistant, make a tests and respond to this question
+      - Négatifs: @TODO for AI assistant, make a tests and respond to this question
   5. Si tu utilise la serialization afin de partager le contexte PHP entre 2 exécutions de code alors il faut que cette solution fonctionne avec toutes les closures possibles. Pas d'exception de closure ne pouvant être serializé à part pour problème de sécurité ou une closure synthaxiquement erronée ne pouvant être serializé par exemple.

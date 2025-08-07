@@ -960,12 +960,13 @@ class Shell extends Application
             // Just run the command normally and let it handle the error
         }
 
-        // Special handling for commands with CodeArgument to allow multi-line input
-        if ($shellInput->hasCodeArgument()) {
-            $shellInput = $this->handleMultiLineCodeArgument($shellInput, $command, $input);
-        }
-
+        // Check for help flag FIRST, before multi-line handling
         if (!$shellInput->hasParameterOption(['--help', '-h'])) {
+            // Special handling for commands with CodeArgument to allow multi-line input
+            if ($shellInput->hasCodeArgument()) {
+                $shellInput = $this->handleMultiLineCodeArgument($shellInput, $command, $input);
+            }
+            
             try {
                 return $command->run($shellInput, $this->output);
             } catch (\Exception $e) {

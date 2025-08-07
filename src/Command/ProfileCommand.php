@@ -476,6 +476,15 @@ $outFile = $input->getOption('out');
 
     private function executeWithXdebugTracing(string $code, string $filterLevel, OutputInterface $output, bool $debug = false): array
     {
+        // Vérifier que Xdebug est disponible ET que les fonctions de tracing sont disponibles
+        if (!extension_loaded('xdebug')) {
+            throw new RuntimeException('Xdebug extension is not loaded. Required for --trace-all option.');
+        }
+        
+        if (!function_exists('xdebug_start_trace')) {
+            throw new RuntimeException('Xdebug trace functions not available. Please compile Xdebug with trace support.');
+        }
+
         $shell = $this->getShell();
         $tmpDir = sys_get_temp_dir();
         $traceFile = null;
@@ -484,15 +493,20 @@ $outFile = $input->getOption('out');
         $tracingWrapper = function ($closure, $throwExceptions) use ($tmpDir, &$traceFile, $output, $debug) {
             // Configure Xdebug for tracing
             ini_set('xdebug.mode', 'trace');
-            ini_set('xdebug.start_with_request', 'yes');
+            ini_set('xdebug.start_with_request', 'no');
             ini_set('xdebug.output_dir', $tmpDir);
             ini_set('xdebug.trace_output_name', 'trace.%t.%p');
             ini_set('xdebug.trace_format', '1'); // Human readable format
-            ini_set('xdebug.collect_params', '1');
+            ini_set('xdebug.collect_params', '4'); // Capture full variable contents
             ini_set('xdebug.collect_return', '1');
+            ini_set('xdebug.trace_options', '1'); // Add timestamps
+
+            if ($debug) {
+                $output->writeln('<comment>Xdebug trace configured, starting trace...</comment>');
+            }
 
             // Start tracing
-            xdebug_start_trace();
+            $traceFile = xdebug_start_trace();
 
             try {
                 $closure->execute();
@@ -500,10 +514,16 @@ $outFile = $input->getOption('out');
                 throw $e;
             } finally {
                 // Stop tracing and get the trace file path
-                $traceFile = xdebug_stop_trace();
+                $stoppedFile = xdebug_stop_trace();
+                if ($debug) {
+                    $output->writeln(sprintf('<comment>Trace stopped. File: %s</comment>', $stoppedFile ?? 'null'));
+                }
+                if ($stoppedFile && $stoppedFile !== $traceFile) {
+                    $traceFile = $stoppedFile;
+                }
             }
 
-            return []; // No direct profile data from xdebug_stop_trace
+            return $traceFile; // Return the trace file path
         };
 
         // Set the wrapper on the Shell
@@ -511,19 +531,23 @@ $outFile = $input->getOption('out');
 
         try {
             // Execute the code through the shell, which will use our wrapper
-            $shell->execute($code, true); // Always throw exceptions here
+            $traceFile = $shell->execute($code, true); // Always throw exceptions here
 
-            if ($traceFile === null || !file_exists($traceFile)) {
-                throw new RuntimeException('Xdebug trace file was not generated.');
+            if (!$traceFile || !file_exists($traceFile)) {
+                if ($debug) {
+                    $output->writeln(sprintf('<error>Trace file not found: %s</error>', $traceFile ?? 'null'));
+                }
+                throw new RuntimeException('Xdebug trace file was not generated. Check Xdebug configuration.');
+            }
+
+            if ($debug) {
+                $output->writeln(sprintf('<comment>Parsing trace file: %s</comment>', $traceFile));
             }
 
             // Parse the Xdebug trace file
             $traceData = $this->parseXdebugTrace($traceFile);
 
-            return [
-                'success' => true,
-                'data' => $traceData
-            ];
+            return $traceData;
         } catch (\Throwable $e) {
             if ($debug) {
                 $output->writeln(sprintf('<error>An error occurred during Xdebug tracing: %s</error>', $e->getMessage()));
@@ -734,8 +758,9 @@ $outFile = $input->getOption('out');
         $table->setHeaders($headers);
         
         foreach (array_slice($filtered, 0, 20) as $name => $func) {
+            $displayName = $fullNamespaces ? $name : $this->formatFunctionName($name);
             $row = [
-                $fullNamespaces ? $name : $this->formatFunctionName($name),
+                $displayName,
                 $func['calls'],
                 $this->formatTime($func['time']), // Format adaptatif du temps
                 number_format($func['time_percent'], 1) . '%',
@@ -752,7 +777,7 @@ $outFile = $input->getOption('out');
         
         $output->writeln(sprintf(
             "\n<info>Profiling results (%s):</info>",
-            $filterLevel === 'user' ? 'user code only' : $filterLevel
+            $filterLevel === 'user' ? 'user code only' : ($filterLevel === 'all' ? 'all functions' : $filterLevel)
         ));
         
         $table->render();
@@ -956,10 +981,34 @@ $outFile = $input->getOption('out');
 
     private function extractFunctionParams(string $functionName): string
     {
-        // Tenter d'extraire les paramètres de la fonction
-        if (preg_match('/(?<name>.*?)(?:\((?<params>.*?)\))?$/', $functionName, $matches)) {
+        // Pour les fonctions avec paramètres capturés par XHProf/Xdebug
+        if (preg_match('/(?<name>.*?)\((?<params>.*?)\)$/', $functionName, $matches)) {
             return $matches['params'] ?? '';
         }
+        
+        // Pour les fonctions PHP natives, essayer de récupérer la signature
+        if (function_exists($functionName)) {
+            try {
+                $reflection = new \ReflectionFunction($functionName);
+                $params = [];
+                foreach ($reflection->getParameters() as $param) {
+                    $paramStr = '$' . $param->getName();
+                    if ($param->isOptional() && $param->isDefaultValueAvailable()) {
+                        try {
+                            $default = $param->getDefaultValue();
+                            $paramStr .= '=' . var_export($default, true);
+                        } catch (\ReflectionException $e) {
+                            $paramStr .= '=?';
+                        }
+                    }
+                    $params[] = $paramStr;
+                }
+                return implode(', ', $params);
+            } catch (\ReflectionException $e) {
+                // Ignore reflection errors
+            }
+        }
+        
         return '';
     }
 
