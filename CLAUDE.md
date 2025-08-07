@@ -11,6 +11,8 @@ PsySH is a runtime developer console, interactive debugger and REPL for PHP. It'
 - Symfony Console for command infrastructure
 - nikic/php-parser for PHP AST parsing
 - Symfony VarDumper for output formatting
+- Symfony Process for isolated code execution
+- opis/closure for closure serialization (profiling)
 - Composer for dependency management
 
 ## Development Commands
@@ -58,11 +60,13 @@ make clean
 - Main application class extending Symfony Console Application
 - Manages the REPL loop, input/output, code execution, and context
 - Handles command registration and execution
+- Tracks executed code history via `$executedCodeHistory` for context preservation
 - Central orchestrator for all shell functionality
 
 **Command System** (`src/Command/`):
 - All commands extend `Psy\Command\Command` (which extends Symfony's BaseCommand)
 - Commands must be associated with a Shell instance, not generic Console Application
+- **ProfileCommand**: Advanced profiling with complete context preservation, supports XHProf and Xdebug
 - Key commands: ListCommand, ShowCommand, DocCommand, HelpCommand, ProfileCommand, etc.
 
 **Code Processing Pipeline**:
@@ -99,6 +103,11 @@ class MyCommand extends Command
 **Context Management**:
 - Variables are managed in the `Context` class
 - Shell maintains execution context across REPL sessions
+- **Context Preservation**: ProfileCommand captures complete execution state including:
+  - All shell-defined classes, functions, constants, and namespaces
+  - Variable scope with closure serialization support
+  - Composer autoloader state and include/require history
+  - External project context (Symfony, Laravel, etc.)
 - Includes/requires are tracked separately from variable context
 
 ### Testing Structure
@@ -107,20 +116,25 @@ class MyCommand extends Command
 - `CodeCleanerTestCase` base class for testing code cleaner passes
 - `TestCase` and `ParserTestCase` for general testing utilities
 - Command tests should extend appropriate base classes and test command behavior
+- **ProfileCommand Testing**: Updated tests support new adaptive formatting and context preservation features
 
 ### Development Workflow Notes
 
 **Branch Management:**
 - Main development branch: `main` 
-- Feature branch for Xdebug integration: `xdebug`
-- Current modified files: `src/Command/ProfileCommand.php`, `src/Shell.php`
+- **Current branch**: `profile` (active development on ProfileCommand enhancements)
+- Recent development focus: Complete context preservation for ProfileCommand
+- Modified files: `src/Command/ProfileCommand.php` (major rewrite), `src/Shell.php` (execution history tracking)
 
 **Dependencies and Build Tools:**
 - Uses `composer-bin-plugin` for isolated dev dependencies in `vendor-bin/`
+- **New dependency**: `opis/closure` for closure serialization in ProfileCommand
 - Box PHAR compiler for building distributable executables
 - PHPStan baseline and ignore files located in `vendor-bin/phpstan/`
 
 **Process Isolation Pattern:**
 - Code execution uses `Symfony\Component\Process\Process` for isolation
+- **ProfileCommand Context Reconstruction**: Complete shell state is serialized and restored in isolated process
 - Critical for new features like Xdebug profiling to avoid affecting main shell
-- See XDEBUG.md for detailed specs on isolated process profiling implementation
+- Supports both XHProf and Xdebug profiling backends with context preservation
+- See PROFILING.md for detailed specs on profiling implementation
