@@ -57,11 +57,11 @@ HELP
         $depth = (int) $input->getOption('depth');
         $watchedVars = $input->getOption('watch');
 
-        $context = $this->getApplication()->getShell()->getContext();
+        $context = $this->getShell();
 
         $output->writeln('<info>Exploring context (depth=' . $depth . '):</info>');
 
-        $variables = $context->getAll();
+        $variables = $context->getScopeVariables();
 
         $table = new Table($output);
         $table->setHeaders(['Variable', 'Type', 'Value']);

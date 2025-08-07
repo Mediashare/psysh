@@ -66,3 +66,4 @@ Psysh is a modular, object-oriented application with a clear separation of conce
       - Positifs: @TODO for AI assistant, make a tests and respond to this question
       - Négatifs: @TODO for AI assistant, make a tests and respond to this question
   5. Si tu utilise la serialization afin de partager le contexte PHP entre 2 exécutions de code alors il faut que cette solution fonctionne avec toutes les closures possibles. Pas d'exception de closure ne pouvant être serializé à part pour problème de sécurité ou une closure synthaxiquement erronée ne pouvant être serializé par exemple.
+  6. Dans le résultat du profilage doit contenir uniquement les traces utiles.

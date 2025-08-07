@@ -92,3 +92,14 @@ build/%/psysh: vendor/bin/box build/%
 dist/psysh-$(VERSION).tar.gz: build/psysh/psysh
 	@mkdir -p $(@D)
 	tar -C $(dir $<) -czf $@ $(notdir $<)
+build/psysh-php80: $(PSYSH_SRC) $(PSYSH_SRC_FILES)
+	rm -rf $@ || true
+	mkdir $@
+	cp -R $(PSYSH_SRC) $@/
+	sed -i -e "/^ *const VERSION =/ s/'.*'/'$(VERSION)'/" $@/src/Shell.php
+	composer config --working-dir $@ platform.php 8.0
+	composer require --working-dir $@ $(COMPOSER_REQUIRE_OPTS) php:'>=8.0'
+	composer require --working-dir $@ $(COMPOSER_REQUIRE_OPTS) symfony/polyfill-iconv symfony/polyfill-mbstring
+	composer require --working-dir $@ $(COMPOSER_REQUIRE_OPTS) --dev roave/security-advisories:dev-latest
+	composer update --working-dir $@ $(COMPOSER_UPDATE_OPTS)
+	composer config --working-dir $@ platform.php --unset

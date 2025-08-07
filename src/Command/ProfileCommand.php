@@ -77,8 +77,10 @@ HELP
             );
         }
 
+        dump($input->getOptions());
+
         $code = $input->getArgument('code');
-$outFile = $input->getOption('out');
+        $outFile = $input->getOption('out');
         $filterLevel = $input->getOption('full') ? 'all' : $input->getOption('filter');
         $threshold = (int) $input->getOption('threshold');
         $showParams = $input->getOption('show-params');
@@ -87,6 +89,16 @@ $outFile = $input->getOption('out');
         $debug = $input->getOption('debug');
 
         $shell = $this->getShell();
+
+        if ($debug) {
+            $output->writeln(sprintf('<comment>Debug: filterLevel=%s, showAll=%s, showParams=%s, fullNamespaces=%s, traceAll=%s</comment>', 
+                $filterLevel,
+                ($filterLevel === 'all') ? 'true' : 'false',
+                $showParams ? 'true' : 'false',
+                $fullNamespaces ? 'true' : 'false', 
+                $traceAll ? 'true' : 'false'
+            ));
+        }
 
         $profile_data = [];
         $success = false;
@@ -143,8 +155,17 @@ $outFile = $input->getOption('out');
         }
         
         if ($success) {
-            // Filtrer et formater les résultats
-            $filtered_data = $this->filterProfileData($profile_data, $filterLevel === 'all');
+            // Debug: afficher les données brutes si demandé
+            if ($debug && $output->getVerbosity() >= OutputInterface::VERBOSITY_DEBUG) {
+                $output->writeln('<comment>Raw profile data keys:</comment>');
+                foreach (array_keys($profile_data) as $key) {
+                    $output->writeln("  $key");
+                }
+            }
+            
+            // Filtrer et formater les résultats avec le bon niveau de filtrage
+            $showAll = ($filterLevel === 'all');
+            $filtered_data = $this->filterProfileData($profile_data, $showAll);
             
             // Afficher les résultats
             $this->displayResults($filtered_data, $output, $filterLevel, $threshold, $showParams, $fullNamespaces);
@@ -706,8 +727,20 @@ $outFile = $input->getOption('out');
 
     private function displayResults(array $data, OutputInterface $output, string $filterLevel, int $threshold, bool $showParams = false, bool $fullNamespaces = false): void
     {
-        // Filtrer selon le niveau
+        // Appliquer d'abord le filtrage par niveau, puis par seuil
         $filtered = $this->filterFunctions($data, $filterLevel, $threshold);
+        
+        // Debug pour voir ce qui est filtré
+        if ($output->getVerbosity() >= OutputInterface::VERBOSITY_DEBUG) {
+            $output->writeln(sprintf('<comment>Filter level: %s, Original: %d functions, Filtered: %d functions</comment>', 
+                $filterLevel, count($data), count($filtered)));
+        }
+        
+        // Debug info for options
+        if ($output->getVerbosity() >= OutputInterface::VERBOSITY_DEBUG) {
+            $output->writeln(sprintf('<comment>Options: showParams=%s, fullNamespaces=%s</comment>', 
+                $showParams ? 'true' : 'false', $fullNamespaces ? 'true' : 'false'));
+        }
         
         // Si pas de données après filtrage, afficher toujours le résumé avec les données brutes
         if (empty($filtered)) {
@@ -758,7 +791,9 @@ $outFile = $input->getOption('out');
         $table->setHeaders($headers);
         
         foreach (array_slice($filtered, 0, 20) as $name => $func) {
+            // Apply full namespaces option properly
             $displayName = $fullNamespaces ? $name : $this->formatFunctionName($name);
+            
             $row = [
                 $displayName,
                 $func['calls'],
@@ -768,8 +803,10 @@ $outFile = $input->getOption('out');
                 number_format($func['memory_percent'], 1) . '%',
             ];
             
+            // Add parameters column if requested
             if ($showParams) {
-                $row[] = $this->extractFunctionParams($name);
+                $params = $this->extractFunctionParams($name);
+                $row[] = $params ?: 'N/A';
             }
             
             $table->addRow($row);
@@ -807,7 +844,7 @@ $outFile = $input->getOption('out');
                     // En mode user, inclure le code utilisateur ET les fonctions PHP appelées directement
                     return $func['is_user'] || $this->isDirectlyCalledFunction($name);
                 case 'php':
-                    return $func['is_user'] || !$this->isInternalFunction($func['name']);
+                    return $func['is_user'] || !$this->isInternalFunction($name);
                 case 'all':
                     return true;
             }
@@ -869,12 +906,25 @@ $outFile = $input->getOption('out');
 
     private function formatFunctionName(string $name): string
     {
-        // Raccourcir les noms trop longs
-        if (strlen($name) > 60) {
-            // Garder le début et la fin
+        // Raccourcir les noms trop longs seulement si pas en mode full-namespaces
+        if (strlen($name) > 80) {
+            // Garder le début et la fin pour les très longs noms
             $parts = explode('\\', $name);
             if (count($parts) > 3) {
                 return $parts[0] . '\\...\\' . end($parts);
+            }
+        }
+        
+        // Raccourcir les namespaces communs
+        $shortcuts = [
+            'Psy\\ExecutionClosure::' => 'ExecutionClosure::',
+            'Psy\\Command\\' => 'Command::',
+            '{closure:' => '{closure:',
+        ];
+        
+        foreach ($shortcuts as $long => $short) {
+            if (str_starts_with($name, $long)) {
+                return str_replace($long, $short, $name);
             }
         }
         
@@ -917,8 +967,8 @@ $outFile = $input->getOption('out');
                 continue;
             }
             
-            // Toujours ignorer certaines fonctions internes
-            if (in_array($child, self::IGNORED_FUNCTIONS)) {
+            // En mode non-full, ignorer certaines fonctions internes
+            if (!$showAll && in_array($child, self::IGNORED_FUNCTIONS)) {
                 continue;
             }
             
@@ -986,17 +1036,35 @@ $outFile = $input->getOption('out');
             return $matches['params'] ?? '';
         }
         
+        // Extraire le nom de fonction réel (sans namespace)
+        $cleanName = $functionName;
+        if (str_contains($functionName, '::')) {
+            $parts = explode('::', $functionName);
+            $cleanName = end($parts);
+        } elseif (str_contains($functionName, '\\')) {
+            $parts = explode('\\', $functionName);
+            $cleanName = end($parts);
+        }
+        
         // Pour les fonctions PHP natives, essayer de récupérer la signature
-        if (function_exists($functionName)) {
+        if (function_exists($cleanName)) {
             try {
-                $reflection = new \ReflectionFunction($functionName);
+                $reflection = new \ReflectionFunction($cleanName);
                 $params = [];
                 foreach ($reflection->getParameters() as $param) {
                     $paramStr = '$' . $param->getName();
                     if ($param->isOptional() && $param->isDefaultValueAvailable()) {
                         try {
                             $default = $param->getDefaultValue();
-                            $paramStr .= '=' . var_export($default, true);
+                            if (is_string($default)) {
+                                $paramStr .= '="' . addslashes($default) . '"';
+                            } elseif (is_bool($default)) {
+                                $paramStr .= '=' . ($default ? 'true' : 'false');
+                            } elseif (is_null($default)) {
+                                $paramStr .= '=null';
+                            } else {
+                                $paramStr .= '=' . $default;
+                            }
                         } catch (\ReflectionException $e) {
                             $paramStr .= '=?';
                         }
@@ -1007,6 +1075,11 @@ $outFile = $input->getOption('out');
             } catch (\ReflectionException $e) {
                 // Ignore reflection errors
             }
+        }
+        
+        // For closures and user functions, provide basic info
+        if (str_contains($functionName, 'closure')) {
+            return 'closure params';
         }
         
         return '';
@@ -1125,8 +1198,60 @@ $outFile = $input->getOption('out');
             'eval', // quand appelé par PsySH
         ];
         
-        return in_array($child, $systemFunctions) || 
-            ($parent && str_starts_with($parent, 'Psy\\Command\\ProfileCommand'));
+        // Ignorer les polyfills Symfony (toujours, car ce sont des détails d'implémentation)
+        if (str_starts_with($child, 'Symfony\\Polyfill\\')) {
+            return true;
+        }
+        
+        // Ignorer les fonctions système de PsySH
+        if (in_array($child, $systemFunctions)) {
+            return true;
+        }
+        
+        // Ignorer SEULEMENT les appels qui viennent directement de ProfileCommand
+        // Cela permet de filtrer le post-processing tout en gardant les appels utilisateur
+        if ($parent && str_starts_with($parent, 'Psy\\Command\\ProfileCommand::')) {
+            return true;
+        }
+        
+        // Ignorer les appels internes de formatage qui viennent après l'exécution
+        $profileCommandMethods = [
+            'Psy\\Command\\ProfileCommand::displayResults',
+            'Psy\\Command\\ProfileCommand::filterProfileData', 
+            'Psy\\Command\\ProfileCommand::filterFunctions',
+            'Psy\\Command\\ProfileCommand::formatFunctionName',
+            'Psy\\Command\\ProfileCommand::formatTime',
+            'Psy\\Command\\ProfileCommand::formatMemory',
+            'Psy\\Command\\ProfileCommand::saveProfileData',
+            'Psy\\Command\\ProfileCommand::enhanceWithCallGraph',
+        ];
+        
+        if ($parent && in_array($parent, $profileCommandMethods)) {
+            return true;
+        }
+        
+        // Ignorer les appels qui viennent des systèmes internes de PsySH (historique, formatage, etc.)
+        $psyshInternalParents = [
+            'Psy\\Shell::addCodeBufferToHistory',  // array_filter, implode
+            'Psy\\Shell::onExecute',               // formatage console
+            'Psy\\Shell::writeStdout',             // gestion sortie
+            'Psy\\Shell::flushCode',               // nettoyage code
+            'Psy\\Context::getAll',                // contexte variables
+            'Psy\\Context::getSpecialVariables',   // variables spéciales
+            'Symfony\\Component\\Console\\Formatter\\OutputFormatter::escape', // preg_replace
+            'Symfony\\Component\\Console\\Formatter\\OutputFormatter::escapeTrailingBackslash',
+        ];
+        
+        if ($parent && in_array($parent, $psyshInternalParents)) {
+            return true;
+        }
+        
+        // Ignorer les appels qui viennent des namespaces système de Symfony Console
+        if ($parent && str_starts_with($parent, 'Symfony\\Component\\Console\\')) {
+            return true;
+        }
+        
+        return false;
     }
 
     private function isUserCodeContext(?string $parent): bool
