@@ -47,3 +47,22 @@ Psysh is a modular, object-oriented application with a clear separation of conce
   4. This method preserves the entire session context, including variables, user-defined classes, functions, and autoloaders.
   5. The command parses the `xhprof` or `Xdebug` output to display a summary table.
   6. See [PROFILING.md](PROFILING.md) for more details.
+
+- **ProfileCommand implement rules**:
+  1. La commande profile a des options (--flag) et prend en argument un CodeArgument (une ou plusieurs lignes de code php). Son but est de profiler l'execution du code donné en argument à la commande profile. 
+  2. TOUT le contexte php du shell psysh (historique, autoload, class, functions, variables créer et ou modifier) doit être partagé lors de l'execution du code donné à la commande profilage peut importe la solution utilisée, ex: eval(), Process(), sub Psy\Shell(). Cela veut dire qu'il doit être possible de créer une class/function à partir de psysh et de lancer la commande profile avec du code utilisant cette class/function, de cette manière les logs du profilage contiennes tous les calls de functions (incluant les appels à la class/function de provenance du shell psysh) sans surplus (ex: les calls de fonctions de psysh ne devant pas être logger).
+  3. Il faut trouver une solution pour executer un profilage précis et complet du code exécuter donné en argument de la commande profile. Je dois avoir les logs précis de tous les appels de function custom et native à php. Exclure les logs subtentiels du resultat si la méthode l'exige.
+  4. Différentes méthodes ont étés testées:
+    - La méthode par évaluation (`eval()`). 
+      - Positifs: rapidité d'execution.
+      - Négatifs: n'est pas précis dans le résultat du profilage, ne contient qu'une ligne (étant le call correspondant à l'éval() et ne rentre pas dans le détail).
+    - La méthode par sub shell Psysh.
+      - Positifs: Le code exécuter dans le sous shell psysh contient facilement le même contexte php que le main process psysh. Dans les résultats de profilage il y a bien une cohérence entre les logs de profilage et le code exécuté.
+      - Négatifs: Contient des calls de fonction psysh dans le résultat du profilage. Ceux-ci ne devant pas être présent logiquement. Solution possible serait d'avoir un filtrage performant sur les calls à afficher dans le profilage, en vérifiant que l'execution de chaque calls provient bien uniquement du contexte d'execution de CodeArgument.
+    - La méthode par sub Process Symfony.
+      - Positifs: à déterminé...
+      - Négatifs: à déterminé...
+    - La méthode fichier php temporaire.
+      - Positifs: à déterminé...
+      - Négatifs: à déterminé...
+  5. Si tu utilise la serialization afin de partager le contexte PHP entre 2 exécutions de code alors il faut que cette solution fonctionne avec toutes les closures possibles. Pas d'exception de closure ne pouvant être serializé à part pour problème de sécurité ou une closure synthaxiquement erronée ne pouvant être serializé par exemple.

@@ -68,4 +68,28 @@ class ProfileCommandTest extends \Psy\Test\TestCase
         $this->assertStringContainsString('Time', $output);
         $this->assertStringContainsString('Memory', $output);
     }
+
+    public function testProfileCommandWithClosure()
+    {
+        if (!\extension_loaded('xdebug')) {
+            $this->markTestSkipped('Xdebug extension is not loaded.');
+        }
+
+        $shell = new Shell();
+        $shell->setScopeVariables([
+            'myClosure' => function () {
+                return 'hello from closure';
+            },
+        ]);
+        $this->command->setApplication($shell);
+
+        $tester = new CommandTester($this->command);
+        $tester->execute([
+            'code' => 'echo $myClosure();',
+        ]);
+
+        $output = $tester->getDisplay();
+        $this->assertStringContainsString('Total execution', $output);
+        $this->assertStringNotContainsString('could not be serialized', $output);
+    }
 }

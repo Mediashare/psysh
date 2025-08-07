@@ -51,3 +51,16 @@ The `profile` command is fully context-aware. It executes the code directly with
 *   **Environment**: Constants and environment variables are replicated in the profiling process.
 
 This deep integration allows for profiling code that relies on the interactive session's state without any modifications, providing the most realistic performance metrics.
+
+### Limitations
+
+Due to the way PHP handles closures, those defined interactively within the PsySH REPL (i.e., not in a file) cannot be serialized and are therefore not available in the profiling context. If you need to profile a closure, define it in a file and include that file in your PsySH session.
+
+### Debugging with `--debug`
+
+The `--debug` option provides extensive information to help troubleshoot profiling issues. When enabled, it will display:
+
+*   **Context Restoration Details**: Logs the name, type, and serialization status of each variable as it's restored in the profiling context.
+*   **Generated Profiling Script**: The complete PHP script that is executed for profiling, allowing you to inspect the exact code being run.
+*   **Process Output**: The standard output (STDOUT) and standard error (STDERR) from the profiling process, which can reveal errors or warnings from the PHP interpreter or the profiling extensions.
+*   **Temporary File Path**: The path to the temporary profiling script, which is not deleted after execution, allowing for manual inspection.

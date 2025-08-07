@@ -86,19 +86,60 @@ $outFile = $input->getOption('out');
         $traceAll = $input->getOption('trace-all');
         $debug = $input->getOption('debug');
 
-        // Exécuter le code avec profilage isolé
+        $shell = $this->getShell();
+
+        $profile_data = [];
+        $success = false;
+
         try {
             if ($traceAll) {
-                $result = $this->executeWithXdebugTracing($code, $filterLevel, $output, $debug);
+                $profile_data = $this->executeWithXdebugTracing($code, $filterLevel, $output, $debug);
+                $success = true;
             } else {
-                $result = $this->executeWithProfiling($code, $filterLevel, $output, $debug);
+                // Define the profiling wrapper for XHProf
+                $profilingWrapper = function ($closure, $throwExceptions) use ($output, $debug) {
+                    $profileData = [];
+
+                    if (function_exists('xhprof_enable')) {
+                        xhprof_enable(XHPROF_FLAGS_CPU + XHPROF_FLAGS_MEMORY);
+                    }
+
+                    try {
+                        $closure->execute();
+                    } catch (\Throwable $e) {
+                        // Re-throw the exception after profiling is done
+                        throw $e;
+                    } finally {
+                        if (function_exists('xhprof_disable')) {
+                            $profileData = xhprof_disable();
+                        }
+                    }
+
+                    return $profileData;
+                };
+
+                // Set the wrapper on the Shell
+                $shell->setCodeExecutionWrapper($profilingWrapper);
+
+                try {
+                    // Execute the code through the shell, which will use our wrapper
+                    $profile_data = $shell->execute($code, true); // Always throw exceptions here
+                    $success = true;
+                } catch (\Throwable $e) {
+                    if ($debug) {
+                        $output->writeln(sprintf('<error>An error occurred during profiling: %s</error>', $e->getMessage()));
+                    }
+                    throw $e; // Re-throw the exception to be handled by the shell
+                } finally {
+                    // Always reset the wrapper after execution
+                    $shell->setCodeExecutionWrapper(null);
+                }
             }
-            $success = $result['success'];
-            $profile_data = $result['data'];
         } catch (\Throwable $e) {
-            $success = false;
-            $output->writeln(sprintf('<error>%s</error>', $e->getMessage()));
-            return 1;
+            if ($debug) {
+                $output->writeln(sprintf('<error>An error occurred during profiling: %s</error>', $e->getMessage()));
+            }
+            throw $e; // Re-throw the exception to be handled by the shell
         }
         
         if ($success) {
@@ -118,118 +159,9 @@ $outFile = $input->getOption('out');
     }
 
 
-    private function prepareCodeWithXdebugTracing(string $code, bool $debug = false): string
-    {
-        $shell = $this->getShell();
-        
-        // S'assurer que le code se termine par un point-virgule
-        $code = rtrim($code);
-        if (!str_ends_with($code, ';')) {
-            $code = $code . ';';
-        }
-        
-        // Sérialiser le contexte complet du shell
-        $serializedVars = $this->serializeShellContext($shell, $debug);
-        
-        // Code simple pour Xdebug tracing avec contexte restauré
-        $fullCode = <<<EOFPHP
-// Charger l'autoloader si disponible
-if (file_exists(__DIR__ . '/vendor/autoload.php')) {
-    require_once __DIR__ . '/vendor/autoload.php';
-}
+    
 
-// Restaurer le contexte du shell
-{$serializedVars}
-
-// Marquer le début du code utilisateur
-\$start_time = microtime(true);
-
-try {
-    // Exécuter le code utilisateur dans le contexte restauré
-    \$result = eval('{$code}');
-} catch (Throwable \$e) {
-    // Capturer les erreurs mais continuer pour récupérer le temps
-    fprintf(STDERR, "ERROR:%s\n", \$e->getMessage());
-}
-
-// Marquer la fin
-\$end_time = microtime(true);
-\$execution_time = (\$end_time - \$start_time) * 1000000;
-
-// Signal de fin pour parsing
-fprintf(STDERR, "EXECUTION_TIME:%.0f\n", \$execution_time);
-EOFPHP;
-        
-        return $fullCode;
-    }
-
-    private function serializeShellContext($shell, bool $debug = false): string
-    {
-        $contextLines = [];
-        
-        // 1. Inclure les fichiers requis (similaire à Shell::execute)
-        $includes = $shell->getIncludes();
-        foreach ($includes as $include) {
-            if (file_exists($include)) {
-                $contextLines[] = sprintf('require_once %s;', var_export($include, true));
-            }
-        }
-        
-        // 2. Exécuter le code précédemment défini dans le shell
-        $executedCode = $shell->getExecutedCodeAsString();
-        if (!empty($executedCode)) {
-            $contextLines[] = "// Code précédemment exécuté dans le shell";
-            $contextLines[] = $executedCode;
-        }
-        
-        // 3. Restaurer les variables de scope (similaire à ExecutionClosure)
-        $vars = $shell->getScopeVariables(false); // false pour exclure 'this'
-        $contextLines[] = "// Restauration des variables de scope";
-        
-        foreach ($vars as $name => $value) {
-            // Exclure les variables spéciales PsySH
-            if (in_array($name, ['_', '_e', '__out', '__class', '__namespace'])) {
-                continue;
-            }
-            
-            try {
-                // Utiliser var_export pour la sérialisation simple
-                if ($this->canVarExport($value)) {
-                    $contextLines[] = sprintf('$%s = %s;', $name, var_export($value, true));
-                } elseif ($value instanceof \Closure) {
-                    // Gestion spéciale des closures avec opis/closure si disponible
-                    if (function_exists('\Opis\Closure\serialize')) {
-                        try {
-                            $serialized = \Opis\Closure\serialize($value);
-                            $contextLines[] = sprintf('$%s = \Opis\Closure\unserialize(%s);', $name, var_export($serialized, true));
-                        } catch (\Throwable $e) {
-                            $contextLines[] = sprintf('// Closure $%s could not be serialized: %s', $name, $e->getMessage());
-                        }
-                    } else {
-                        $contextLines[] = sprintf('// Closure $%s ignored - opis/closure not available', $name);
-                    }
-                } elseif (is_object($value)) {
-                    // Pour les objets, tenter la sérialisation
-                    $serialized = @serialize($value);
-                    if ($serialized !== false) {
-                        $contextLines[] = sprintf('$%s = unserialize(%s);', $name, var_export($serialized, true));
-                    } else {
-                        $contextLines[] = sprintf('// Variable $%s (object %s) could not be serialized', $name, get_class($value));
-                    }
-                } else {
-                    $contextLines[] = sprintf('// Variable $%s of type %s skipped', $name, gettype($value));
-                }
-            } catch (\Throwable $e) {
-                $contextLines[] = sprintf('// Variable $%s could not be exported: %s', $name, $e->getMessage());
-            }
-        }
-        
-        if ($debug) {
-            $contextLines[] = sprintf('// Debug: %d variables restored', count($vars));
-        }
-        
-        return implode("\n", $contextLines);
-    }
+    
     
     private function canVarExport($value): bool
     {
@@ -423,27 +355,17 @@ EOFPHP;
     {
         try {
             $reflector = new \ReflectionFunction($closure);
-            
+
             // Éviter les closures internes
             if ($reflector->isInternal()) {
                 return false;
             }
-            
-            // Éviter les closures liées à des classes (peuvent causer des problèmes)
-            if ($reflector->getClosureScopeClass()) {
-                return false;
-            }
-            
-            // Éviter les closures qui utilisent $this
-            if ($reflector->getClosureThis()) {
+
+            // Éviter les closures définies dans le code évalué (eval()'d code)
+            if ($reflector->getFileName() && str_contains($reflector->getFileName(), "eval()'d code")) {
                 return false;
             }
 
-            // Éviter les closures définies dans le code évalué (eval()\'d code)
-            if ($reflector->getFileName() && str_contains($reflector->getFileName(), 'eval()\'d code')) {
-                return false;
-            }
-            
             return true;
         } catch (\Throwable $e) {
             return false;
@@ -543,135 +465,78 @@ EOFPHP;
         }
     }
 
-    private function executeWithProfiling(string $code, string $filterLevel, OutputInterface $output, bool $debug = false): array
-    {
-        if ($debug) {
-            $output->writeln('<comment>[DEBUG] Exécution du profilage in-process avec héritage du contexte...</comment>');
-        }
-        
-        $shell = $this->getShell();
-        
-        // Utiliser une approche similaire à ExecutionClosure mais avec profilage
-        try {
-            // Commencer le profilage XHProf avec tous les flags pour capturer plus de détails
-            $flags = XHPROF_FLAGS_CPU + XHPROF_FLAGS_MEMORY;
-            if (defined('XHPROF_FLAGS_NO_BUILTINS')) {
-                // Ne pas ignorer les fonctions intégrées pour voir les appels à l'intérieur d'eval
-                // $flags += XHPROF_FLAGS_NO_BUILTINS; // Désactivé pour voir plus de détails
-            }
-            
-            if ($debug) {
-                $output->writeln('<comment>[DEBUG] Démarrage XHProf avec flags: ' . $flags . '</comment>');
-            }
-            
-            xhprof_enable($flags);
-            
-            // Exécuter le code dans le contexte du shell (similaire à ExecutionClosure)
-            $result = $this->executeInShellContext($shell, $code);
-            
-            // Arrêter le profilage
-            $profileData = xhprof_disable();
-            
-            return [
-                'success' => true,
-                'data' => $profileData
-            ];
-            
-        } catch (\Throwable $e) {
-            // S'assurer d'arrêter le profilage même en cas d'erreur
-            @xhprof_disable();
-            throw new \RuntimeException('Erreur lors du profilage: ' . $e->getMessage());
-        }
-    }
     
+
     /**
-     * Exécute le code directement via le shell PsySH pour un profilage complet
+     * Generate the full PHP script to be executed for profiling.
+     * This script includes the full shell context and wraps the user code
+     * with profiler start/stop calls.
      */
-    private function executeInShellContext($shell, string $code)
-    {
-        // Nettoyer le code (s'assurer qu'il se termine par un point-virgule)
-        $code = rtrim($code);
-        if (!str_ends_with($code, ';')) {
-            $code = $code . ';';
-        }
-        
-        try {
-            // Utiliser le mécanisme normal d'exécution de PsySH (Shell::execute)
-            // Cela nous donne le profilage le plus complet possible car le code
-            // passe par le pipeline normal de PsySH (CodeCleaner, ExecutionClosure, etc.)
-            return $shell->execute($code, true);
-        } catch (\Error $e) {
-            // Si Shell::execute échoue (par exemple dans les tests où le shell n'est pas complètement initialisé),
-            // utiliser une approche plus directe similaire à ExecutionClosure
-            if (str_contains($e->getMessage(), 'must not be accessed before initialization')) {
-                return $this->executeWithDirectClosure($shell, $code);
-            }
-            throw $e;
-        }
-    }
     
-    /**
-     * Exécute le code avec une approche directe similaire à ExecutionClosure (pour les tests)
-     */
-    private function executeWithDirectClosure($shell, string $code)
-    {
-        // Pour les cas où le shell n'est pas complètement initialisé (tests),
-        // utiliser eval() avec le contexte restauré - c'est notre fallback
-        
-        // Restaurer les variables de scope (similaire à ExecutionClosure::execute)
-        extract($shell->getScopeVariables(false));
-        
-        // Utiliser eval() comme fallback (même si moins détaillé)
-        return eval($code);
-    }
 
     private function executeWithXdebugTracing(string $code, string $filterLevel, OutputInterface $output, bool $debug = false): array
     {
+        $shell = $this->getShell();
         $tmpDir = sys_get_temp_dir();
-        
-        // Préparer le code avec contexte pour Xdebug tracing
-        $fullCode = $this->prepareCodeWithXdebugTracing($code, $debug);
-        
-        // Exécuter avec Xdebug tracing activé
-        $process = new \Symfony\Component\Process\Process([
-            PHP_BINARY,
-            '-d', 'memory_limit=-1',
-            '-d', 'xdebug.mode=trace',
-            '-d', 'xdebug.start_with_request=yes',
-            '-d', 'xdebug.output_dir=' . $tmpDir,
-            '-d', 'xdebug.trace_output_name=trace.%t.%p',
-            '-d', 'xdebug.trace_format=1', // Format lisible
-            '-d', 'xdebug.collect_params=1',
-            '-d', 'xdebug.collect_return=1',
-            '-r', $fullCode
-        ]);
-        
-        $process->run();
-        
-        // Vérifier si le process s'est bien exécuté
-        if (!$process->isSuccessful()) {
-            throw new \RuntimeException('Erreur lors de l\'exécution du tracing: ' . $process->getErrorOutput());
+        $traceFile = null;
+
+        // Define the Xdebug tracing wrapper
+        $tracingWrapper = function ($closure, $throwExceptions) use ($tmpDir, &$traceFile, $output, $debug) {
+            // Configure Xdebug for tracing
+            ini_set('xdebug.mode', 'trace');
+            ini_set('xdebug.start_with_request', 'yes');
+            ini_set('xdebug.output_dir', $tmpDir);
+            ini_set('xdebug.trace_output_name', 'trace.%t.%p');
+            ini_set('xdebug.trace_format', '1'); // Human readable format
+            ini_set('xdebug.collect_params', '1');
+            ini_set('xdebug.collect_return', '1');
+
+            // Start tracing
+            xdebug_start_trace();
+
+            try {
+                $closure->execute();
+            } catch (\Throwable $e) {
+                throw $e;
+            } finally {
+                // Stop tracing and get the trace file path
+                $traceFile = xdebug_stop_trace();
+            }
+
+            return []; // No direct profile data from xdebug_stop_trace
+        };
+
+        // Set the wrapper on the Shell
+        $shell->setCodeExecutionWrapper($tracingWrapper);
+
+        try {
+            // Execute the code through the shell, which will use our wrapper
+            $shell->execute($code, true); // Always throw exceptions here
+
+            if ($traceFile === null || !file_exists($traceFile)) {
+                throw new RuntimeException('Xdebug trace file was not generated.');
+            }
+
+            // Parse the Xdebug trace file
+            $traceData = $this->parseXdebugTrace($traceFile);
+
+            return [
+                'success' => true,
+                'data' => $traceData
+            ];
+        } catch (\Throwable $e) {
+            if ($debug) {
+                $output->writeln(sprintf('<error>An error occurred during Xdebug tracing: %s</error>', $e->getMessage()));
+            }
+            throw $e;
+        } finally {
+            // Always reset the wrapper after execution
+            $shell->setCodeExecutionWrapper(null);
+            // Clean up the trace file
+            if ($traceFile && file_exists($traceFile)) {
+                @unlink($traceFile);
+            }
         }
-        
-        // Trouver le fichier de trace généré
-        $traceFiles = glob($tmpDir . '/trace.*');
-        if (empty($traceFiles)) {
-            throw new \RuntimeException('Aucun fichier de trace généré');
-        }
-        
-        // Prendre le fichier le plus récent
-        $traceFile = end($traceFiles);
-        
-        // Parser le fichier de trace Xdebug
-        $traceData = $this->parseXdebugTrace($traceFile);
-        
-        // Nettoyer le fichier de trace
-        unlink($traceFile);
-        
-        return [
-            'success' => true,
-            'data' => $traceData
-        ];
     }
 
     private function parseXdebugTrace(string $traceFile): array
@@ -1034,7 +899,12 @@ EOFPHP;
             
             // En mode non-full, appliquer des filtres intelligents
             if (!$showAll) {
-                // Ignorer les fonctions PsySH
+                // Ignorer complètement les appels système de PsySH
+                if ($this->isPsyshSystemCall($parent, $child)) {
+                    continue;
+                }
+                
+                // Ignorer les fonctions PsySH sauf si appelées depuis du code utilisateur
                 $isPsyshFunction = false;
                 foreach (self::PSYSH_NAMESPACES as $namespace) {
                     if (str_starts_with((string)$child, $namespace)) {
@@ -1042,15 +912,8 @@ EOFPHP;
                         break;
                     }
                 }
-                if ($isPsyshFunction) {
-                    continue;
-                }
                 
-                // Pour les tests, être moins restrictif avec le filtrage
-                // Garder les fonctions principales même si elles semblent être du système
-                if ($child === 'main()' || str_contains($child, 'echo') || str_contains($child, 'sleep')) {
-                    // Garder ces fonctions importantes
-                } elseif ($this->isProfilingSystemCall($parent, $child)) {
+                if ($isPsyshFunction && !$this->isUserCodeContext($parent)) {
                     continue;
                 }
             }
@@ -1199,5 +1062,37 @@ EOFPHP;
         } else {
             $output->writeln('<error>Failed to save profile data</error>');
         }
+    }
+    
+    private function isPsyshSystemCall(?string $parent, string $child): bool
+    {
+        // Fonctions système de PsySH à toujours ignorer
+        $systemFunctions = [
+            'Psy\\Shell::handleInput',
+            'Psy\\Shell::execute', 
+            'Psy\\Shell::getLastException',
+            'Psy\\ExecutionClosure::execute',
+            'Psy\\Command\\Command::run',
+            'eval', // quand appelé par PsySH
+        ];
+        
+        return in_array($child, $systemFunctions) || 
+            ($parent && str_starts_with($parent, 'Psy\\Command\\ProfileCommand'));
+    }
+
+    private function isUserCodeContext(?string $parent): bool
+    {
+        if (!$parent) {
+            return true; // Code au niveau racine = utilisateur
+        }
+        
+        // Si le parent n'est pas une fonction PsySH, c'est du code utilisateur
+        foreach (self::PSYSH_NAMESPACES as $namespace) {
+            if (str_starts_with($parent, $namespace)) {
+                return false;
+            }
+        }
+        
+        return true;
     }
 }

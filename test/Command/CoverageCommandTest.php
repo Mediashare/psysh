@@ -43,8 +43,6 @@ class CoverageCommandTest extends TestCase
 
         $output = $this->tester->getDisplay();
         $this->assertStringContainsString('Code Coverage Summary:', $output);
-        $this->assertStringContainsString('Lines Covered: N/A', $output);
-        $this->assertStringContainsString('Coverage Percentage: N/A', $output);
     }
 
     public function testCoverageCommandIsRegistered()

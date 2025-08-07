@@ -57,7 +57,7 @@ class Shell extends Application
 
     private Configuration $config;
     private CodeCleaner $cleaner;
-    private OutputInterface $output;
+    private ?OutputInterface $output = null;
     private ?int $originalVerbosity = null;
     private Readline $readline;
     private array $inputBuffer;
@@ -79,6 +79,12 @@ class Shell extends Application
     private ?int $errorReporting = null;
     /** @var array Historique du code exécuté dans le shell */
     private array $executedCodeHistory = [];
+    private $codeExecutionWrapper = null;
+
+    public function setCodeExecutionWrapper(?callable $wrapper): void
+    {
+        $this->codeExecutionWrapper = $wrapper;
+    }
 
     /**
      * Create a new Psy Shell.
@@ -96,6 +102,9 @@ class Shell extends Application
         $this->codeStack = [];
         $this->stdoutBuffer = '';
         $this->loopListeners = $this->getDefaultLoopListeners();
+
+        $this->output = $this->config->getOutput();
+        $this->originalVerbosity = $this->output->getVerbosity();
 
         parent::__construct('Psy Shell', self::VERSION);
 
@@ -1520,6 +1529,11 @@ class Shell extends Application
         
         $this->setCode($code, true);
         $closure = new ExecutionClosure($this);
+
+        if ($this->codeExecutionWrapper) {
+            $wrapper = $this->codeExecutionWrapper;
+            return $wrapper($closure, $throwExceptions);
+        }
 
         if ($throwExceptions) {
             return $closure->execute();
