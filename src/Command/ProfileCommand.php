@@ -95,12 +95,19 @@ HELP
         $shell = $this->getShell();
 
         if ($debug) {
-            $output->writeln(sprintf('<comment>Debug mode enabled. Options: filter=%s, threshold=%dμs, params=%s, namespaces=%s, trace-all=%s</comment>',
-                $filterLevel, $threshold,
-                $showParams ? 'yes' : 'no',
-                $fullNamespaces ? 'full' : 'short',
-                $traceAll ? 'yes' : 'no'
+            $output->writeln('');
+            $output->writeln('<info>=== DEBUG MODE ENABLED ===</info>');
+            $output->writeln('');
+            $output->writeln('<comment>Options Configuration:</comment>');
+            $output->writeln(sprintf('  • Filter level:      <info>%s</info> %s',
+                $filterLevel,
+                $filterLevel === 'user' ? '(user code only)' : ($filterLevel === 'all' ? '(all functions including PHP native)' : '(user code + PHP native)')
             ));
+            $output->writeln(sprintf('  • Time threshold:    <info>%d μs</info>', $threshold));
+            $output->writeln(sprintf('  • Show parameters:   <info>%s</info>', $showParams ? 'yes' : 'no'));
+            $output->writeln(sprintf('  • Full namespaces:   <info>%s</info>', $fullNamespaces ? 'yes' : 'no'));
+            $output->writeln(sprintf('  • Trace all calls:   <info>%s</info>', $traceAll ? 'yes (Xdebug subprocess required)' : 'no'));
+            $output->writeln('');
         }
 
         // Select engine
@@ -118,14 +125,35 @@ HELP
         }
 
         if ($debug) {
-            $output->writeln(sprintf('<comment>Selected engine: %s</comment>', $engine->getName()));
+            $output->writeln('<comment>Profiling Engine:</comment>');
+            $output->writeln(sprintf('  • Engine type:       <info>%s</info>', $engine->getName()));
+            if ($engine->getName() === 'XHProf') {
+                $output->writeln('  • Mode:              <info>In-process profiling</info>');
+                $output->writeln('  • Features:          <info>High performance, low overhead</info>');
+            } elseif ($engine->getName() === 'Xdebug Subprocess') {
+                $output->writeln('  • Mode:              <info>Subprocess with trace mode</info>');
+                $output->writeln('  • Features:          <info>Complete call tracing, all functions captured</info>');
+            } elseif ($engine->getName() === 'Xdebug') {
+                $output->writeln('  • Mode:              <info>In-process with trace mode</info>');
+                $output->writeln('  • Features:          <info>Standard tracing within current process</info>');
+            }
+            $output->writeln('');
         }
 
         // Execute profiling
         try {
             $profileData = $engine->profile($code, $shell, $debug);
             if ($debug) {
-                $output->writeln(sprintf('<comment>Profiling complete: %d functions recorded</comment>', count($profileData)));
+                $output->writeln('<comment>Profiling Execution:</comment>');
+                $output->writeln(sprintf('  • Status:            <info>Completed successfully</info>'));
+                $output->writeln(sprintf('  • Functions captured: <info>%d</info>', count($profileData)));
+
+                // Count function types
+                $userFunctions = array_filter($profileData, fn($f) => $f['is_user'] ?? false);
+                $internalFunctions = array_filter($profileData, fn($f) => !($f['is_user'] ?? true));
+                $output->writeln(sprintf('  • User functions:    <info>%d</info>', count($userFunctions)));
+                $output->writeln(sprintf('  • PHP native funcs:  <info>%d</info>', count($internalFunctions)));
+                $output->writeln('');
             }
         } catch (RuntimeException $e) {
             throw new RuntimeException('Profiling execution failed: ' . $e->getMessage());
@@ -301,9 +329,17 @@ HELP
             $table->addRow($row);
         }
         
+        // Build the appropriate display title based on filter level
+        $displayTitle = match ($filterLevel) {
+            'user' => 'user code only',
+            'php' => 'user code + PHP native functions',
+            'all' => 'all functions (including PsySH internal)',
+            default => $filterLevel,
+        };
+
         $output->writeln(sprintf(
             "\n<info>Profiling results (%s):</info>",
-            $filterLevel === 'user' ? 'user code only' : ($filterLevel === 'all' ? 'all functions' : $filterLevel)
+            $displayTitle
         ));
         
         $table->render();

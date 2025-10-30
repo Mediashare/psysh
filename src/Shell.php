@@ -950,8 +950,13 @@ class Shell extends Application
             throw new \InvalidArgumentException('Command not found: '.$input);
         }
 
-        $shellInput = new ShellInput(\str_replace('\\', '\\\\', \rtrim($input, " \t\n\r\0\x0B;")));
-        
+        // Remove the command name from input before creating ShellInput
+        // This allows ShellInput to properly parse options like --debug, --full, etc.
+        $commandName = $command->getName();
+        $inputWithoutCommand = \preg_replace('/^\s*' . \preg_quote($commandName, '/') . '\s*/', '', $input);
+
+        $shellInput = new ShellInput(\str_replace('\\', '\\\\', \rtrim($inputWithoutCommand, " \t\n\r\0\x0B;")));
+
         // Try to bind first, but catch any exceptions
         try {
             $shellInput->bind($command->getDefinition());
@@ -1075,7 +1080,22 @@ class Shell extends Application
         }
 
         $completeCode = implode("\n", $codeBuffer);
-        $newInputString = $command->getName().' '.$completeCode;
+
+        // Preserve options from the original input
+        $options = $input->getOptions();
+        $optionsString = '';
+        foreach ($options as $name => $value) {
+            if ($value === null || $value === false) {
+                continue;
+            }
+            if ($value === true) {
+                $optionsString .= ' --' . $name;
+            } else {
+                $optionsString .= ' --' . $name . '=' . escapeshellarg($value);
+            }
+        }
+
+        $newInputString = $command->getName() . $optionsString . ' ' . $completeCode;
         $newShellInput = new ShellInput($newInputString);
 
         try {

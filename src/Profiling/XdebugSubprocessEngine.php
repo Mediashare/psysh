@@ -60,6 +60,8 @@ class XdebugSubprocessEngine implements ProfilerEngine
                 'ini_set("xdebug.trace_output_name", %s);' . PHP_EOL .
                 'ini_set("xdebug.trace_format", "1");' . PHP_EOL .
                 'ini_set("xdebug.collect_params", "4");' . PHP_EOL .
+                'ini_set("xdebug.collect_return", "1");' . PHP_EOL .
+                'ini_set("xdebug.collect_assignments", "0");' . PHP_EOL .
                 '$__psysh_trace_file = xdebug_start_trace();' . PHP_EOL .
                 '$__psysh_thrown = null;' . PHP_EOL .
                 'ob_start();' . PHP_EOL .

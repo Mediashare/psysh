@@ -49,7 +49,6 @@ class XhprofEngine implements ProfilerEngine
             unset($vars[$profileDataVar]);
             $shell->setScopeVariables($vars);
 
-        dump(1, $profileData);
             // Normalize XHProf data
             return $this->normalizeXhprofData($profileData);
 
@@ -76,11 +75,13 @@ class XhprofEngine implements ProfilerEngine
      * Normalize XHProf data to the standard profiling format.
      *
      * XHProf returns data in parent==>child format with keys: ct, wt, cpu, mu, pmu
+     *
+     * Note: We only filter out PsySH internal functions here, NOT PHP native functions.
+     * The filtering of PHP native functions is done later in ProfileCommand based on the --full option.
      */
     private function normalizeXhprofData(array $xhprofData): array
     {
         $normalized = [];
-        $showAll = false;
 
         foreach ($xhprofData as $parentChild => $metrics) {
             // Parse parent==>child format
@@ -96,8 +97,9 @@ class XhprofEngine implements ProfilerEngine
                 continue;
             }
 
-            // Apply filtering
-            if (!$showAll && $this->shouldSkipFunction($parent, $child)) {
+            // Only filter out PsySH internal functions (not PHP native functions)
+            // This allows --full to show PHP native functions
+            if ($this->shouldSkipFunction($parent, $child)) {
                 continue;
             }
 
