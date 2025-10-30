@@ -19,6 +19,7 @@ class ProfileEntry
     private float $timePercent;
     private float $memoryPercent;
     private bool $isUser;
+    private array $params;
 
     public function __construct(
         string $name,
@@ -29,7 +30,8 @@ class ProfileEntry
         int $cpuTime,
         float $timePercent = 0.0,
         float $memoryPercent = 0.0,
-        bool $isUser = true
+        bool $isUser = true,
+        array $params = []
     ) {
         $this->name = $name;
         $this->calls = $calls;
@@ -40,6 +42,7 @@ class ProfileEntry
         $this->timePercent = $timePercent;
         $this->memoryPercent = $memoryPercent;
         $this->isUser = $isUser;
+        $this->params = $params;
     }
 
     public function getName(): string
@@ -87,6 +90,11 @@ class ProfileEntry
         return $this->isUser;
     }
 
+    public function getParams(): array
+    {
+        return $this->params;
+    }
+
     /**
      * Update percentage calculations based on totals.
      */
@@ -112,6 +120,7 @@ class ProfileEntry
             'time_percent' => $this->timePercent,
             'memory_percent' => $this->memoryPercent,
             'is_user' => $this->isUser,
+            'params' => $this->params,
         ];
     }
 }

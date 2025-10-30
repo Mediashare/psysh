@@ -15,15 +15,50 @@ class ContextBuilder
             $contextLines[] = sprintf('require_once %s;', var_export($autoloader, true));
         }
 
+        // Capture all executed code (classes, functions, etc.)
         $userCode = method_exists($shell, 'getExecutedCodeAsString') ? $shell->getExecutedCodeAsString() : '';
         if (!empty($userCode)) {
             $contextLines[] = $userCode;
         }
 
+        // Capture scope variables
+        self::captureScopeVariables($shell, $contextLines);
+
         self::captureShellConstants($contextLines);
         self::captureEnvironmentVariables($contextLines);
 
         return implode(PHP_EOL, $contextLines);
+    }
+
+    /**
+     * Capture scope variables from the shell.
+     *
+     * Note: Objects are NOT serialized here because they should already be
+     * created by the executed code. We only serialize scalar values.
+     */
+    private static function captureScopeVariables(Shell $shell, array &$context): void
+    {
+        if (!method_exists($shell, 'getScopeVariables')) {
+            return;
+        }
+
+        $scopeVars = $shell->getScopeVariables(false);
+        foreach ($scopeVars as $name => $value) {
+            // Skip internal variables
+            if (strpos($name, '__psysh') === 0 || $name === 'this' || $name === '_') {
+                continue;
+            }
+
+            // Only serialize scalar types and arrays (NOT objects)
+            // Objects should be recreated from the executed code
+            if (self::isSerializable($value)) {
+                try {
+                    $context[] = sprintf('$%s = %s;', $name, var_export($value, true));
+                } catch (\Exception $e) {
+                    $context[] = sprintf("// Variable \$%s could not be serialized: %s", $name, $e->getMessage());
+                }
+            }
+        }
     }
 
     private static function captureEnvironmentVariables(array &$context): void
@@ -86,4 +121,5 @@ class ContextBuilder
 
         return false;
     }
+
 }

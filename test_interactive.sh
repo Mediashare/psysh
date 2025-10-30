@@ -58,3 +58,43 @@ EOF
 else
     echo "Skipping complex profiling test: 'expect' command not found."
 fi
+
+echo ""
+echo "---"
+echo "Running complex profiling test..."
+
+if command -v expect >/dev/null 2>&1; then
+    PSYSH_PAGER=cat expect << 'EOF'
+set timeout 1
+spawn bin/psysh
+expect ">>> "
+# Send class definition line by line
+send "class MyCalculator {\r"
+send "    public function sumAndHash(array \$numbers) {\r"
+send "        \$this->echo();\r"
+send "        \$sum = array_sum(\$numbers);\r"
+send "        \$this->echo();\r"
+send "        \$hash = md5(\$sum);\r"
+send "        \$this->echo();\r"
+send "        return strlen(\$hash);\r"
+send "    }\r"
+send "    private function echo() {\r"
+send "        echo 'Hello '. array_sum(range(100, 1000000));\r"
+send "    }\r"
+send "}\r"
+expect ">>> "
+send "\$calc = new MyCalculator()\r"
+expect ">>> "
+send "profile --debug --filter=php --show-params \$calc->sumAndHash(range(1, 100))\r"
+# Check for profiler output and specific native function calls
+expect "Total Time"
+expect "strlen"
+expect "md5"
+expect "array_sum"
+send "exit\r"
+expect eof
+EOF
+    echo "Complex profiling test passed."
+else
+    echo "Skipping complex profiling test: 'expect' command not found."
+fi

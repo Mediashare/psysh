@@ -62,12 +62,12 @@ class XdebugSubprocessEngine implements ProfilerEngine
                 'ini_set("xdebug.collect_params", "4");' . PHP_EOL .
                 'ini_set("xdebug.collect_return", "1");' . PHP_EOL .
                 'ini_set("xdebug.collect_assignments", "0");' . PHP_EOL .
-                '$__psysh_trace_file = xdebug_start_trace();' . PHP_EOL .
                 '$__psysh_thrown = null;' . PHP_EOL .
                 'ob_start();' . PHP_EOL .
+                '$__psysh_trace_file = xdebug_start_trace();' . PHP_EOL .
                 'try { %s } catch (\Throwable $__psysh_e) { $__psysh_thrown = $__psysh_e; }' . PHP_EOL .
-                'ob_end_clean();' . PHP_EOL .
                 'xdebug_stop_trace();' . PHP_EOL .
+                'ob_end_clean();' . PHP_EOL .
                 'echo $__psysh_trace_file . PHP_EOL;' . PHP_EOL .
                 'if ($__psysh_thrown) { fwrite(STDERR, "Error: " . $__psysh_thrown->getMessage() . PHP_EOL); exit(1); }',
                 var_export($traceBaseName, true),
@@ -76,6 +76,13 @@ class XdebugSubprocessEngine implements ProfilerEngine
 
             // 3. Write complete script to temp file
             $fullScript = "<?php\n" . $contextScript . "\n" . $profilingCode;
+
+            // DEBUG: Save script for inspection if debug mode
+            if ($debug) {
+                $debugPath = sys_get_temp_dir() . '/psysh_profile_debug_' . date('His') . '.php';
+                file_put_contents($debugPath, $fullScript);
+            }
+
             if (file_put_contents($scriptPath, $fullScript) === false) {
                 throw new RuntimeException('Failed to write profiling script to temporary file.');
             }
@@ -109,16 +116,16 @@ class XdebugSubprocessEngine implements ProfilerEngine
             }
 
             // 6. Parse trace file using Xdebug v3 parser
-            $profileData = $this->parseXdebugTrace($traceFile);
-            
+            $profileData = $this->parseXdebugTrace($traceFile, $debug);
+
             // 7. Normalize to standard schema and return ProfileResult
             return $this->createProfileResult($profileData)->toArray();
         } finally {
-            // 8. Clean up temp script and trace file
-            if (!empty($scriptPath) && file_exists($scriptPath)) {
+            // 8. Clean up temp script and trace file (keep in debug mode)
+            if (!$debug && !empty($scriptPath) && file_exists($scriptPath)) {
                 @unlink($scriptPath);
             }
-            if (!empty($traceFile) && file_exists($traceFile)) {
+            if (!$debug && !empty($traceFile) && file_exists($traceFile)) {
                 @unlink($traceFile);
             }
         }
@@ -162,20 +169,19 @@ class XdebugSubprocessEngine implements ProfilerEngine
      * Uses same Xdebug v3 parser logic as in-process profiling.
      *
      * @param string $traceFile Path to trace file
+     * @param bool $debug Debug mode
      *
      * @return array Raw profiling data
      *
      * @throws RuntimeException If trace file cannot be read
      */
-    private function parseXdebugTrace(string $traceFile): array
+    private function parseXdebugTrace(string $traceFile, bool $debug = false): array
     {
-        // Check if file is gzip compressed (Xdebug 3 default)
         $content = @file_get_contents($traceFile);
         if ($content === false) {
             throw new RuntimeException(sprintf('Failed to read trace file: %s', $traceFile));
         }
-        
-        // Detect gzip compression and decompress if needed
+
         if (str_ends_with($traceFile, '.gz') || substr($content, 0, 2) === "\x1f\x8b") {
             $decompressed = @gzdecode($content);
             if ($decompressed === false) {
@@ -187,8 +193,8 @@ class XdebugSubprocessEngine implements ProfilerEngine
         $lines = preg_split('/\r?\n/', $content);
         $functions = [];
         $callStack = [];
-        
-        // Detect file format
+        $levelToFuncNum = []; // For Xdebug 3 format
+
         $fileFormat = null;
         foreach ($lines as $line) {
             if (preg_match('/^File format: (\d+)/', $line, $m)) {
@@ -203,34 +209,37 @@ class XdebugSubprocessEngine implements ProfilerEngine
                 continue;
             }
 
-            // Parse based on detected file format
             if ($fileFormat === 4) {
-                // Xdebug 3 format: level func_num type time memory function is_user filename lineno params...
-                // Example: 2    5    0    0.000332    396328    str_repeat    0    /path/file.php    8    2    'a'    5
-                //         2    5    1    0.000347    396432
                 $parts = preg_split('/\t+/', $t);
-                if (count($parts) < 3) {
-                    continue;
-                }
-                
+                if (count($parts) < 3) continue;
+
                 $level = (int) $parts[0];
                 $funcNum = (int) $parts[1];
                 $type = (int) $parts[2];
-                
+
                 if ($type === 0 && count($parts) >= 6) {
-                    // Function entry
-                    $time = (float) $parts[3] * 1000000; // Convert to microseconds
+                    $time = (float) $parts[3] * 1000000;
                     $memory = (int) $parts[4];
                     $fn = $parts[5];
-                    
+
+                    // Extract parameters from trace (parts[6] onwards)
+                    // Format 4 structure: level, funcNum, type, time, memory, function, is_user, file, line, param_count, param1, param2, ...
+                    $params = [];
+                    if (count($parts) > 9) {
+                        // Skip: is_user (6), file (7), line (8), param_count (9)
+                        // Real parameters start at index 10
+                        $params = array_slice($parts, 10);
+                    }
+
                     $callStack[$funcNum] = [
                         'name' => $fn,
                         'start_time' => $time,
                         'start_memory' => $memory,
                         'level' => $level,
+                        'params' => $params
                     ];
+                    $levelToFuncNum[$level] = $funcNum;
                 } elseif ($type === 1 && count($parts) >= 4) {
-                    // Function exit
                     if (isset($callStack[$funcNum])) {
                         $call = $callStack[$funcNum];
                         $time = (float) $parts[3] * 1000000;
@@ -238,62 +247,94 @@ class XdebugSubprocessEngine implements ProfilerEngine
                         $duration = max(0, $time - $call['start_time']);
                         $memoryDelta = $memory - $call['start_memory'];
 
-                        if (!isset($functions[$call['name']])) {
-                            $functions[$call['name']] = [
+                        $parentFuncNum = $levelToFuncNum[$call['level'] - 1] ?? null;
+                        $parent = $parentFuncNum ? ($callStack[$parentFuncNum]['name'] ?? null) : null;
+                        $entryName = ($parent ? $parent . '==>' : '') . $call['name'];
+
+                        if (!isset($functions[$entryName])) {
+                            $functions[$entryName] = [
                                 'calls' => 0,
                                 'time' => 0,
                                 'memory' => 0,
                                 'peak_memory' => 0,
                                 'cpu_time' => 0,
+                                'params' => []
                             ];
                         }
 
-                        $functions[$call['name']]['calls']++;
-                        $functions[$call['name']]['time'] += $duration;
-                        $functions[$call['name']]['memory'] += $memoryDelta;
-                        $functions[$call['name']]['cpu_time'] += $duration;
+                        $functions[$entryName]['calls']++;
+                        $functions[$entryName]['time'] += $duration;
+                        $functions[$entryName]['memory'] += $memoryDelta;
+                        $functions[$entryName]['cpu_time'] += $duration;
+
+                        // Store params from the first call
+                        if (empty($functions[$entryName]['params']) && !empty($call['params'])) {
+                            $functions[$entryName]['params'] = $call['params'];
+                        }
 
                         unset($callStack[$funcNum]);
                     }
                 }
             } else {
-                // Legacy format (format 1): Match Xdebug computerized trace format
-                // level time memory op function location
-                if (preg_match('/^\s*(\d+)\s+(\d+\.\d+)\s+(\d+)\s+(->|<-)\s+(.+?)(?:\s+\(.+\))?(?:\s+.*)?$/', $t, $m)) {
+                // Legacy format: level time memory op function location params
+                // Example: "   1     0.0002    114872   232    -> function(arg1, arg2) /path/file.php:10"
+                if (preg_match('/^\s*(\d+)\s+(\d+\.\d+)\s+(\d+)(?:\s+\d+)?\s+(->|<-)\s+(.+?)\s+([^\s]+:\d+)(?:\s+(.*))?$/', $t, $m)) {
                     $level = (int) $m[1];
-                    $time = (float) $m[2] * 1000000; // Convert to microseconds
+                    $time = (float) $m[2] * 1000000;
                     $memory = (int) $m[3];
                     $op = $m[4];
-                    $fn = $m[5];
+                    $fnWithParams = $m[5];
+                    $location = $m[6];
+                    $extraParams = $m[7] ?? '';
+
+                    // Extract function name and inline params
+                    $fn = $fnWithParams;
+                    $params = [];
+
+                    // Check if function has parameters in its name: func(param1, param2)
+                    if (preg_match('/^(.+?)\((.*)\)$/', $fnWithParams, $fnMatch)) {
+                        $fn = $fnMatch[1];
+                        if (!empty($fnMatch[2])) {
+                            $params = $this->parseXdebugParams($fnMatch[2]);
+                        }
+                    }
 
                     if ($op === '->') {
-                        // Function entry
                         $callStack[$level] = [
                             'name' => $fn,
                             'start_time' => $time,
                             'start_memory' => $memory,
+                            'params' => $params
                         ];
                     } elseif ($op === '<-') {
-                        // Function exit
                         if (isset($callStack[$level])) {
                             $call = $callStack[$level];
                             $duration = max(0, $time - $call['start_time']);
                             $memoryDelta = $memory - $call['start_memory'];
 
-                            if (!isset($functions[$call['name']])) {
-                                $functions[$call['name']] = [
+                            $parent = $callStack[$level - 1]['name'] ?? null;
+                            $entryName = ($parent ? $parent . '==>' : '') . $call['name'];
+
+                            if (!isset($functions[$entryName])) {
+                                $functions[$entryName] = [
                                     'calls' => 0,
                                     'time' => 0,
                                     'memory' => 0,
                                     'peak_memory' => 0,
                                     'cpu_time' => 0,
+                                    'params' => []
                                 ];
                             }
 
-                            $functions[$call['name']]['calls']++;
-                            $functions[$call['name']]['time'] += $duration;
-                            $functions[$call['name']]['memory'] += $memoryDelta;
-                            $functions[$call['name']]['cpu_time'] += $duration;
+                            $functions[$entryName]['calls']++;
+                            $functions[$entryName]['time'] += $duration;
+                            $functions[$entryName]['memory'] += $memoryDelta;
+                            $functions[$entryName]['cpu_time'] += $duration;
+
+                            // Store params from the first call
+                            if (empty($functions[$entryName]['params']) && !empty($call['params'])) {
+                                $functions[$entryName]['params'] = $call['params'];
+                            }
 
                             unset($callStack[$level]);
                         }
@@ -317,12 +358,23 @@ class XdebugSubprocessEngine implements ProfilerEngine
     private function createProfileResult(array $functions): ProfileResult
     {
         $entries = [];
-        $totalTime = array_sum(array_column($functions, 'time'));
-        $totalMemory = array_sum(array_column($functions, 'memory'));
+        // Recalculate total time and memory from aggregated child metrics
+        $totalTime = 0;
+        $totalMemory = 0;
+        foreach ($functions as $name => $data) {
+            $childName = str_contains($name, '==>') ? explode('==>', $name)[1] : $name;
+            // Aggregate totals from top-level calls (no parent)
+            if (!str_contains($name, '==>')) {
+                $totalTime += $data['time'];
+                $totalMemory += $data['memory'];
+            }
+        }
 
         foreach ($functions as $name => $data) {
             $timePercent = $totalTime > 0 ? ($data['time'] / $totalTime) * 100 : 0;
             $memoryPercent = $totalMemory > 0 ? ($data['memory'] / $totalMemory) * 100 : 0;
+
+            $childName = str_contains($name, '==>') ? explode('==>', $name)[1] : $name;
 
             $entries[$name] = new ProfileEntry(
                 $name,
@@ -333,7 +385,8 @@ class XdebugSubprocessEngine implements ProfilerEngine
                 (int) round($data['cpu_time']),
                 $timePercent,
                 $memoryPercent,
-                $this->isUserFunction($name)
+                $this->isUserFunction($childName),
+                $data['params'] ?? []
             );
         }
 
@@ -396,5 +449,72 @@ class XdebugSubprocessEngine implements ProfilerEngine
         } catch (\ReflectionException $e) {
             return false;
         }
+    }
+
+    /**
+     * Parse Xdebug parameter string and extract parameter values.
+     *
+     * Xdebug with collect_params=4 formats parameters as:
+     * - Strings: 'value'
+     * - Numbers: value
+     * - Arrays: array(size)
+     * - Objects: class name
+     *
+     * @param string $paramsStr Raw parameter string from trace
+     *
+     * @return array Array of parameter values
+     */
+    private function parseXdebugParams(string $paramsStr): array
+    {
+        if (empty($paramsStr)) {
+            return [];
+        }
+
+        $params = [];
+
+        // Remove leading/trailing whitespace and parentheses
+        $paramsStr = trim($paramsStr);
+
+        // Handle format: (param1, param2, ...)
+        if (preg_match('/^\((.*)\)$/', $paramsStr, $matches)) {
+            $paramsStr = $matches[1];
+        }
+
+        // Split by comma, but respect quoted strings
+        $currentParam = '';
+        $inQuote = false;
+        $quoteChar = '';
+        $depth = 0;
+
+        for ($i = 0; $i < strlen($paramsStr); $i++) {
+            $char = $paramsStr[$i];
+
+            if (($char === '"' || $char === "'") && ($i === 0 || $paramsStr[$i - 1] !== '\\')) {
+                if (!$inQuote) {
+                    $inQuote = true;
+                    $quoteChar = $char;
+                } elseif ($char === $quoteChar) {
+                    $inQuote = false;
+                }
+                $currentParam .= $char;
+            } elseif ($char === '(' || $char === '[' || $char === '{') {
+                $depth++;
+                $currentParam .= $char;
+            } elseif ($char === ')' || $char === ']' || $char === '}') {
+                $depth--;
+                $currentParam .= $char;
+            } elseif ($char === ',' && !$inQuote && $depth === 0) {
+                $params[] = trim($currentParam);
+                $currentParam = '';
+            } else {
+                $currentParam .= $char;
+            }
+        }
+
+        if (!empty($currentParam)) {
+            $params[] = trim($currentParam);
+        }
+
+        return $params;
     }
 }
