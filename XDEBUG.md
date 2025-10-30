@@ -1,10 +1,155 @@
 # Intégration de Xdebug dans PsySH : Fonctionnalités et Implémentation
 
-Ce document décrit les fonctionnalités potentielles offertes par l'intégration de Xdebug, avec un focus particulier sur une spécification technique pour le profilage de code.
+Ce document décrit les fonctionnalités offertes par l'intégration de Xdebug, avec un focus particulier sur le profilage de code interactif.
 
 ---
 
-## 1. Spécification Technique : Profilage de Code Interactif
+## 1. Utilisation de la Commande Profile
+
+### 1.1. Activation Requise
+
+Pour utiliser la commande `profile`, Xdebug doit être configuré en mode trace :
+
+```bash
+# Lancement avec mode trace
+XDEBUG_MODE=trace,develop php bin/psysh
+
+# Ou configuration permanente dans php.ini
+xdebug.mode=trace,develop
+```
+
+**Note** : Le mode `develop` est recommandé en complément pour avoir les informations de debug.
+
+### 1.2. Commandes Disponibles
+
+#### Profiler une Expression
+```php
+> profile strlen("hello world")
+> profile array_sum(range(1, 1000))
+```
+
+#### Profiler un Fichier
+```php
+> profile @/path/to/script.php
+```
+
+#### Options Avancées
+```php
+// Mode debug avec informations détaillées
+> profile --debug complex_function()
+
+// Filtrage par niveau (user, php, all)
+> profile --filter=php my_function()
+
+// Seuil de temps minimum (en microsecondes)
+> profile --threshold=1000 expensive_operation()
+
+// Afficher les paramètres des fonctions
+> profile --show-params my_function(arg1, arg2)
+
+// Exporter les données complètes
+> profile --out=/tmp/profile.json my_function()
+
+// Mode trace complet (capture TOUTES les fonctions)
+> profile --trace-all detailed_operation()
+```
+
+### 1.3. Interprétation des Résultats
+
+```
+Profiling results (user code only):
++-----------+-------+---------+--------+--------+----------+
+| Function  | Calls | Time    | Time % | Memory | Memory % |
++-----------+-------+---------+--------+--------+----------+
+| fibonacci | 177   | 10.8 ms | 99.8%  | 0 B    | 0.0%     |
++-----------+-------+---------+--------+--------+----------+
+
+Total execution: Time: 10.8 ms, Memory: 0 B
+```
+
+- **Calls** : Nombre d'appels de la fonction
+- **Time** : Temps d'exécution total (μs, ms ou s)
+- **Time %** : Pourcentage du temps total d'exécution
+- **Memory** : Mémoire consommée/libérée
+- **Memory %** : Pourcentage de la mémoire totale
+
+### 1.4. Dépannage
+
+#### Erreur: "No profiling data collected"
+
+**Causes possibles:**
+1. Xdebug trace mode n'est pas activé
+2. Le code s'exécute trop rapidement (< 1μs)
+3. Tous les appels sont filtrés par les paramètres
+
+**Solutions:**
+```php
+// Vérifier la configuration Xdebug
+php -i | grep xdebug.mode
+
+// Utiliser le mode debug pour diagnostiquer
+> profile --debug your_code()
+
+// Essayer avec un code plus complexe
+> profile array_map(fn($x) => $x * 2, range(1, 1000))
+```
+
+#### Erreur: "Profiling not available"
+
+Ni XHProf ni Xdebug n'est disponible. Solutions :
+
+```bash
+# Option 1: Installer XHProf (recommandé)
+pecl install xhprof
+
+# Option 2: Activer Xdebug trace
+XDEBUG_MODE=trace,develop php bin/psysh
+```
+
+---
+
+## 2. Implémentation Technique
+
+### 2.1. Architecture
+
+Le système de profilage utilise plusieurs moteurs (engines) avec sélection automatique :
+
+1. **XHProf** (priorité 1) : In-process, très rapide, production-ready
+2. **Xdebug In-Process** (priorité 2) : In-process, léger, trace mode requis
+3. **Xdebug Subprocess** (priorité 3) : Processus isolé, capture tout, trace automatique
+
+### 2.2. Formats Supportés
+
+#### Xdebug 3 (Format 4)
+Format moderne par onglets avec numéros de fonction :
+```
+2    5    0    0.000332    396328    str_repeat    0    /path/file.php    8    2
+2    5    1    0.000347    396432
+```
+
+#### Xdebug 2 (Format 1) 
+Format legacy avec opérateurs :
+```
+1    0.000332    396328    ->    str_repeat
+1    0.000347    396432    <-
+```
+
+Les deux formats sont automatiquement détectés et parsés.
+
+### 2.3. Gestion des Cas Limites
+
+#### Output Utilisateur
+Le code profilé peut contenir des `echo/print`. Solution : capture avec `ob_start()/ob_end_clean()`.
+
+#### Fichiers Compressés
+Xdebug 3 génère des `.xt.gz` par défaut. Détection et décompression automatique avec `gzdecode()`.
+
+#### Précision des Types
+Conversion explicite `(int) round()` pour éviter les warnings de précision float → int.
+
+---
+
+## 3. Spécification Technique : Profilage de Code Interactif
 
 Cette section détaille l'implémentation de la fonctionnalité de profilage, qui est un excellent premier pas vers une intégration plus profonde de Xdebug.
 

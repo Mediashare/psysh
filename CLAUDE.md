@@ -1,161 +1,352 @@
-# CLAUDE.md
+# Claude Code Configuration - SPARC Development Environment
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## 🚨 CRITICAL: CONCURRENT EXECUTION & FILE MANAGEMENT
+
+**ABSOLUTE RULES**:
+1. ALL operations MUST be concurrent/parallel in a single message
+2. **NEVER save working files, text/mds and tests to the root folder**
+3. ALWAYS organize files in appropriate subdirectories
+4. **USE CLAUDE CODE'S TASK TOOL** for spawning agents concurrently, not just MCP
+
+### ⚡ GOLDEN RULE: "1 MESSAGE = ALL RELATED OPERATIONS"
+
+**MANDATORY PATTERNS:**
+- **TodoWrite**: ALWAYS batch ALL todos in ONE call (5-10+ todos minimum)
+- **Task tool (Claude Code)**: ALWAYS spawn ALL agents in ONE message with full instructions
+- **File operations**: ALWAYS batch ALL reads/writes/edits in ONE message
+- **Bash commands**: ALWAYS batch ALL terminal operations in ONE message
+- **Memory operations**: ALWAYS batch ALL memory store/retrieve in ONE message
+
+### 🎯 CRITICAL: Claude Code Task Tool for Agent Execution
+
+**Claude Code's Task tool is the PRIMARY way to spawn agents:**
+```javascript
+// ✅ CORRECT: Use Claude Code's Task tool for parallel agent execution
+[Single Message]:
+  Task("Research agent", "Analyze requirements and patterns...", "researcher")
+  Task("Coder agent", "Implement core features...", "coder")
+  Task("Tester agent", "Create comprehensive tests...", "tester")
+  Task("Reviewer agent", "Review code quality...", "reviewer")
+  Task("Architect agent", "Design system architecture...", "system-architect")
+```
+
+**MCP tools are ONLY for coordination setup:**
+- `mcp__claude-flow__swarm_init` - Initialize coordination topology
+- `mcp__claude-flow__agent_spawn` - Define agent types for coordination
+- `mcp__claude-flow__task_orchestrate` - Orchestrate high-level workflows
+
+### 📁 File Organization Rules
+
+**NEVER save to root folder. Use these directories:**
+- `/src` - Source code files
+- `/tests` - Test files
+- `/docs` - Documentation and markdown files
+- `/config` - Configuration files
+- `/scripts` - Utility scripts
+- `/examples` - Example code
 
 ## Project Overview
 
-PsySH is a runtime developer console, interactive debugger and REPL for PHP. It's a library that provides an interactive shell for modern PHP development, allowing users to debug, explore, and experiment with PHP code in real-time.
+This project uses SPARC (Specification, Pseudocode, Architecture, Refinement, Completion) methodology with Claude-Flow orchestration for systematic Test-Driven Development.
 
-**Key Technologies:**
-- PHP 8.0+ (with 7.4 support)
-- Symfony Console for command infrastructure
-- nikic/php-parser for PHP AST parsing
-- Symfony VarDumper for output formatting
-- Symfony Process for isolated code execution
-- opis/closure for closure serialization (profiling)
-- Composer for dependency management
+## SPARC Commands
 
-## Development Commands
+### Core Commands
+- `npx claude-flow sparc modes` - List available modes
+- `npx claude-flow sparc run <mode> "<task>"` - Execute specific mode
+- `npx claude-flow sparc tdd "<feature>"` - Run complete TDD workflow
+- `npx claude-flow sparc info <mode>` - Get mode details
 
-### Building and Testing
+### Batchtools Commands
+- `npx claude-flow sparc batch <modes> "<task>"` - Parallel execution
+- `npx claude-flow sparc pipeline "<task>"` - Full pipeline processing
+- `npx claude-flow sparc concurrent <mode> "<tasks-file>"` - Multi-task processing
+
+### Build Commands
+- `npm run build` - Build project
+- `npm run test` - Run tests
+- `npm run lint` - Linting
+- `npm run typecheck` - Type checking
+
+## SPARC Workflow Phases
+
+1. **Specification** - Requirements analysis (`sparc run spec-pseudocode`)
+2. **Pseudocode** - Algorithm design (`sparc run spec-pseudocode`)
+3. **Architecture** - System design (`sparc run architect`)
+4. **Refinement** - TDD implementation (`sparc tdd`)
+5. **Completion** - Integration (`sparc run integration`)
+
+## Code Style & Best Practices
+
+- **Modular Design**: Files under 500 lines
+- **Environment Safety**: Never hardcode secrets
+- **Test-First**: Write tests before implementation
+- **Clean Architecture**: Separate concerns
+- **Documentation**: Keep updated
+
+## 🚀 Available Agents (54 Total)
+
+### Core Development
+`coder`, `reviewer`, `tester`, `planner`, `researcher`
+
+### Swarm Coordination
+`hierarchical-coordinator`, `mesh-coordinator`, `adaptive-coordinator`, `collective-intelligence-coordinator`, `swarm-memory-manager`
+
+### Consensus & Distributed
+`byzantine-coordinator`, `raft-manager`, `gossip-coordinator`, `consensus-builder`, `crdt-synchronizer`, `quorum-manager`, `security-manager`
+
+### Performance & Optimization
+`perf-analyzer`, `performance-benchmarker`, `task-orchestrator`, `memory-coordinator`, `smart-agent`
+
+### GitHub & Repository
+`github-modes`, `pr-manager`, `code-review-swarm`, `issue-tracker`, `release-manager`, `workflow-automation`, `project-board-sync`, `repo-architect`, `multi-repo-swarm`
+
+### SPARC Methodology
+`sparc-coord`, `sparc-coder`, `specification`, `pseudocode`, `architecture`, `refinement`
+
+### Specialized Development
+`backend-dev`, `mobile-dev`, `ml-developer`, `cicd-engineer`, `api-docs`, `system-architect`, `code-analyzer`, `base-template-generator`
+
+### Testing & Validation
+`tdd-london-swarm`, `production-validator`
+
+### Migration & Planning
+`migration-planner`, `swarm-init`
+
+## 🎯 Claude Code vs MCP Tools
+
+### Claude Code Handles ALL EXECUTION:
+- **Task tool**: Spawn and run agents concurrently for actual work
+- File operations (Read, Write, Edit, MultiEdit, Glob, Grep)
+- Code generation and programming
+- Bash commands and system operations
+- Implementation work
+- Project navigation and analysis
+- TodoWrite and task management
+- Git operations
+- Package management
+- Testing and debugging
+
+### MCP Tools ONLY COORDINATE:
+- Swarm initialization (topology setup)
+- Agent type definitions (coordination patterns)
+- Task orchestration (high-level planning)
+- Memory management
+- Neural features
+- Performance tracking
+- GitHub integration
+
+**KEY**: MCP coordinates the strategy, Claude Code's Task tool executes with real agents.
+
+## 🚀 Quick Setup
+
 ```bash
-# Install dependencies (sets up vendor-bin structure)
-composer install
-
-# Run all tests
-make test
-# or alternatively
-vendor/bin/phpunit
-
-# Run individual test file
-vendor/bin/phpunit test/Command/ProfileCommandTest.php
-
-# Run specific test method
-vendor/bin/phpunit --filter testSpecificMethod test/SomeTest.php
-
-# Run static analysis (PHPStan level 1)
-make phpstan
-# or alternatively  
-vendor/bin/phpstan --memory-limit=1G analyse
-
-# Build PHAR executable
-make build
-
-# Clean all build artifacts and vendor-bin directories
-make clean
+# Add MCP servers (Claude Flow required, others optional)
+claude mcp add claude-flow npx claude-flow@alpha mcp start
+claude mcp add ruv-swarm npx ruv-swarm mcp start  # Optional: Enhanced coordination
+claude mcp add flow-nexus npx flow-nexus@latest mcp start  # Optional: Cloud features
 ```
 
-### Code Quality
-- PHPStan is configured at level 1 (phpstan.neon.dist) with baseline and ignore files
-- Uses bamarni/composer-bin-plugin for isolated dev dependencies in vendor-bin/
-- Tests are located in the `test/` directory and mirror `src/` structure
-- Code follows PSR-4 autoloading with `Psy\` namespace
-- PHP 7.4+ compatibility required (see composer.json constraints)
+## MCP Tool Categories
 
-## Architecture Overview
+### Coordination
+`swarm_init`, `agent_spawn`, `task_orchestrate`
 
-### Core Components
+### Monitoring
+`swarm_status`, `agent_list`, `agent_metrics`, `task_status`, `task_results`
 
-**Shell.php** (`src/Shell.php`):
-- Main application class extending Symfony Console Application
-- Manages the REPL loop, input/output, code execution, and context
-- Handles command registration and execution
-- Tracks executed code history via `$executedCodeHistory` for context preservation
-- Central orchestrator for all shell functionality
+### Memory & Neural
+`memory_usage`, `neural_status`, `neural_train`, `neural_patterns`
 
-**Command System** (`src/Command/`):
-- All commands extend `Psy\Command\Command` (which extends Symfony's BaseCommand)
-- Commands must be associated with a Shell instance, not generic Console Application
-- **ProfileCommand v1.2.0**: Refactored to use `Shell::execute` for maximum accuracy, supports XHProf and Xdebug with fallback mechanisms
-- Key commands: ListCommand, ShowCommand, DocCommand, HelpCommand, ProfileCommand, etc.
+### GitHub Integration
+`github_swarm`, `repo_analyze`, `pr_enhance`, `issue_triage`, `code_review`
 
-**Code Processing Pipeline**:
-- **CodeCleaner** (`src/CodeCleaner/`): AST-based code analysis and transformation
-- **ParserFactory**: Creates PHP-Parser instances for code parsing
-- **Context**: Manages variable scope and execution context
-- **Reflection**: Enhanced reflection capabilities for runtime inspection
+### System
+`benchmark_run`, `features_detect`, `swarm_monitor`
 
-**Input/Output System**:
-- **Readline** (`src/Readline/`): Multiple readline implementations (GNU, Libedit, Hoa, Userland)
-- **Formatter** (`src/Formatter/`): Output formatting for code, docblocks, signatures, traces
-- **TabCompletion**: Intelligent autocompletion system with various matchers
+### Flow-Nexus MCP Tools (Optional Advanced Features)
+Flow-Nexus extends MCP capabilities with 70+ cloud-based orchestration tools:
 
-### Key Patterns
+**Key MCP Tool Categories:**
+- **Swarm & Agents**: `swarm_init`, `swarm_scale`, `agent_spawn`, `task_orchestrate`
+- **Sandboxes**: `sandbox_create`, `sandbox_execute`, `sandbox_upload` (cloud execution)
+- **Templates**: `template_list`, `template_deploy` (pre-built project templates)
+- **Neural AI**: `neural_train`, `neural_patterns`, `seraphina_chat` (AI assistant)
+- **GitHub**: `github_repo_analyze`, `github_pr_manage` (repository management)
+- **Real-time**: `execution_stream_subscribe`, `realtime_subscribe` (live monitoring)
+- **Storage**: `storage_upload`, `storage_list` (cloud file management)
 
-**Command Development**:
-```php
-// All PsySH commands must extend Psy\Command\Command
-class MyCommand extends Command
-{
-    // Use getShell() instead of getApplication() for type safety
-    protected function execute($input, $output) {
-        $shell = $this->getShell(); // Returns Shell instance
-        // Implementation
-    }
-}
+**Authentication Required:**
+- Register: `mcp__flow-nexus__user_register` or `npx flow-nexus@latest register`
+- Login: `mcp__flow-nexus__user_login` or `npx flow-nexus@latest login`
+- Access 70+ specialized MCP tools for advanced orchestration
+
+## 🚀 Agent Execution Flow with Claude Code
+
+### The Correct Pattern:
+
+1. **Optional**: Use MCP tools to set up coordination topology
+2. **REQUIRED**: Use Claude Code's Task tool to spawn agents that do actual work
+3. **REQUIRED**: Each agent runs hooks for coordination
+4. **REQUIRED**: Batch all operations in single messages
+
+### Example Full-Stack Development:
+
+```javascript
+// Single message with all agent spawning via Claude Code's Task tool
+[Parallel Agent Execution]:
+  Task("Backend Developer", "Build REST API with Express. Use hooks for coordination.", "backend-dev")
+  Task("Frontend Developer", "Create React UI. Coordinate with backend via memory.", "coder")
+  Task("Database Architect", "Design PostgreSQL schema. Store schema in memory.", "code-analyzer")
+  Task("Test Engineer", "Write Jest tests. Check memory for API contracts.", "tester")
+  Task("DevOps Engineer", "Setup Docker and CI/CD. Document in memory.", "cicd-engineer")
+  Task("Security Auditor", "Review authentication. Report findings via hooks.", "reviewer")
+  
+  // All todos batched together
+  TodoWrite { todos: [...8-10 todos...] }
+  
+  // All file operations together
+  Write "backend/server.js"
+  Write "frontend/App.jsx"
+  Write "database/schema.sql"
 ```
 
-**Code Cleaning/Processing**:
-- Code goes through multiple "passes" in CodeCleaner before execution
-- Each pass extends `CodeCleanerPass` and transforms the AST
-- Passes handle PHP version compatibility, syntax validation, and runtime safety
+## 📋 Agent Coordination Protocol
 
-**Context Management**:
-- Variables are managed in the `Context` class
-- Shell maintains execution context across REPL sessions
-- **ProfileCommand Execution**: Uses `Shell::execute` for native context preservation (v1.2.0)
-  - Same execution context as normal PsySH operations
-  - Automatic fallback to `eval()` with scope restoration if needed
-  - No manual serialization required - maximum robustness
-  - Handles complex closures and objects seamlessly
-- Includes/requires are tracked separately from variable context
+### Every Agent Spawned via Task Tool MUST:
 
-### Testing Structure
+**1️⃣ BEFORE Work:**
+```bash
+npx claude-flow@alpha hooks pre-task --description "[task]"
+npx claude-flow@alpha hooks session-restore --session-id "swarm-[id]"
+```
 
-- Tests mirror the `src/` structure in `test/`
-- `CodeCleanerTestCase` base class for testing code cleaner passes
-- `TestCase` and `ParserTestCase` for general testing utilities
-- Command tests should extend appropriate base classes and test command behavior
-- **ProfileCommand Testing**: Updated tests support new adaptive formatting, fallback mechanisms, and context preservation features
-- **Debug Testing**: Tests include scenarios for fallback execution and error handling
+**2️⃣ DURING Work:**
+```bash
+npx claude-flow@alpha hooks post-edit --file "[file]" --memory-key "swarm/[agent]/[step]"
+npx claude-flow@alpha hooks notify --message "[what was done]"
+```
 
-### ProfileCommand Development Notes (v1.2.0)
+**3️⃣ AFTER Work:**
+```bash
+npx claude-flow@alpha hooks post-task --task-id "[task]"
+npx claude-flow@alpha hooks session-end --export-metrics true
+```
 
-**Execution Architecture**:
-- **Primary**: `Shell::execute` - Same context as normal PsySH operations
-- **Fallback**: `eval()` with scope restoration - For edge cases or test environments  
-- **Debug Mode**: `--debug` flag provides verbose output for troubleshooting
-- **Robustness**: Handles complex closures, objects, and edge cases gracefully
+## 🎯 Concurrent Execution Examples
 
-**Key Implementation Details**:
-- Removed 100+ lines of complex temporary file and serialization logic
-- No manual context reconstruction needed
-- Better error handling and recovery mechanisms
-- Maintains backward compatibility with existing profiling workflows
+### ✅ CORRECT WORKFLOW: MCP Coordinates, Claude Code Executes
 
-**Known Limitations**:
-- Interactive closures (defined in REPL) cannot be serialized - define in files for profiling
-- Xdebug 3.x compatibility fully supported, older versions may have limited features
-- Complex object graphs may require fallback execution method
+```javascript
+// Step 1: MCP tools set up coordination (optional, for complex tasks)
+[Single Message - Coordination Setup]:
+  mcp__claude-flow__swarm_init { topology: "mesh", maxAgents: 6 }
+  mcp__claude-flow__agent_spawn { type: "researcher" }
+  mcp__claude-flow__agent_spawn { type: "coder" }
+  mcp__claude-flow__agent_spawn { type: "tester" }
 
-### Development Workflow Notes
+// Step 2: Claude Code Task tool spawns ACTUAL agents that do the work
+[Single Message - Parallel Agent Execution]:
+  // Claude Code's Task tool spawns real agents concurrently
+  Task("Research agent", "Analyze API requirements and best practices. Check memory for prior decisions.", "researcher")
+  Task("Coder agent", "Implement REST endpoints with authentication. Coordinate via hooks.", "coder")
+  Task("Database agent", "Design and implement database schema. Store decisions in memory.", "code-analyzer")
+  Task("Tester agent", "Create comprehensive test suite with 90% coverage.", "tester")
+  Task("Reviewer agent", "Review code quality and security. Document findings.", "reviewer")
+  
+  // Batch ALL todos in ONE call
+  TodoWrite { todos: [
+    {id: "1", content: "Research API patterns", status: "in_progress", priority: "high"},
+    {id: "2", content: "Design database schema", status: "in_progress", priority: "high"},
+    {id: "3", content: "Implement authentication", status: "pending", priority: "high"},
+    {id: "4", content: "Build REST endpoints", status: "pending", priority: "high"},
+    {id: "5", content: "Write unit tests", status: "pending", priority: "medium"},
+    {id: "6", content: "Integration tests", status: "pending", priority: "medium"},
+    {id: "7", content: "API documentation", status: "pending", priority: "low"},
+    {id: "8", content: "Performance optimization", status: "pending", priority: "low"}
+  ]}
+  
+  // Parallel file operations
+  Bash "mkdir -p app/{src,tests,docs,config}"
+  Write "app/package.json"
+  Write "app/src/server.js"
+  Write "app/tests/server.test.js"
+  Write "app/docs/API.md"
+```
 
-**Branch Management:**
-- Main development branch: `main` 
-- **Current branch**: `profile` (active development on ProfileCommand enhancements)
-- **Recent focus**: ProfileCommand v1.2.0 - simplification and robustness improvements
-- Modified files: `src/Command/ProfileCommand.php` (refactored execution engine), various supporting commands
+### ❌ WRONG (Multiple Messages):
+```javascript
+Message 1: mcp__claude-flow__swarm_init
+Message 2: Task("agent 1")
+Message 3: TodoWrite { todos: [single todo] }
+Message 4: Write "file.js"
+// This breaks parallel coordination!
+```
 
-**Dependencies and Build Tools:**
-- Uses `composer-bin-plugin` for isolated dev dependencies in `vendor-bin/`
-- **Optional dependency**: `opis/closure` for advanced closure handling in ProfileCommand (fallback scenarios)
-- Box PHAR compiler for building distributable executables
-- PHPStan baseline and ignore files located in `vendor-bin/phpstan/`
+## Performance Benefits
 
-**Profiling Execution Pattern (v1.2.0):**
-- **Primary method**: Uses `Shell::execute` for native context execution
-- **Fallback method**: `eval()` with scope variable restoration for edge cases
-- **Legacy support**: `Symfony\Component\Process\Process` with temporary files (deprecated)
-- **Debug capability**: `--debug` flag provides verbose troubleshooting output
-- Supports both XHProf and Xdebug profiling backends
-- **Documentation**: See PROFILING.md for usage, PATCHNOTES.md for version history, GEMINI.md for implementation rules
+- **84.8% SWE-Bench solve rate**
+- **32.3% token reduction**
+- **2.8-4.4x speed improvement**
+- **27+ neural models**
+
+## Hooks Integration
+
+### Pre-Operation
+- Auto-assign agents by file type
+- Validate commands for safety
+- Prepare resources automatically
+- Optimize topology by complexity
+- Cache searches
+
+### Post-Operation
+- Auto-format code
+- Train neural patterns
+- Update memory
+- Analyze performance
+- Track token usage
+
+### Session Management
+- Generate summaries
+- Persist state
+- Track metrics
+- Restore context
+- Export workflows
+
+## Advanced Features (v2.0.0)
+
+- 🚀 Automatic Topology Selection
+- ⚡ Parallel Execution (2.8-4.4x speed)
+- 🧠 Neural Training
+- 📊 Bottleneck Analysis
+- 🤖 Smart Auto-Spawning
+- 🛡️ Self-Healing Workflows
+- 💾 Cross-Session Memory
+- 🔗 GitHub Integration
+
+## Integration Tips
+
+1. Start with basic swarm init
+2. Scale agents gradually
+3. Use memory for context
+4. Monitor progress regularly
+5. Train patterns from success
+6. Enable hooks automation
+7. Use GitHub tools first
+
+## Support
+
+- Documentation: https://github.com/ruvnet/claude-flow
+- Issues: https://github.com/ruvnet/claude-flow/issues
+- Flow-Nexus Platform: https://flow-nexus.ruv.io (registration required for cloud features)
+
+---
+
+Remember: **Claude Flow coordinates, Claude Code creates!**
+
+# important-instruction-reminders
+Do what has been asked; nothing more, nothing less.
+NEVER create files unless they're absolutely necessary for achieving your goal.
+ALWAYS prefer editing an existing file to creating a new one.
+NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.
+Never save working files, text/mds and tests to the root folder.

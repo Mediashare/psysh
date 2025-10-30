@@ -1,0 +1,14 @@
+Version: 3.1.5
+File format: 4
+TRACE START [2025-10-29 12:00:00.000000]
+0.0001   391368   -> {main}() /Users/duck/app/psysh/test/fixtures/xdebug_script.php:0
+0.0002   391528     -> my_function() /Users/duck/app/psysh/test/fixtures/xdebug_script.php:3
+0.0003   391600       -> strlen() /Users/duck/app/psysh/test/fixtures/xdebug_script.php:4
+0.0004   391600       <- 11
+0.0005   391528     <-
+0.0006   391528     -> another_function() /Users/duck/app/psysh/test/fixtures/xdebug_script.php:7
+0.0007   391600       -> usleep() /Users/duck/app/psysh/test/fixtures/xdebug_script.php:8
+0.0018   391600       <-
+0.0019   391528     <-
+0.0020   391368   <-
+TRACE END [2025-10-29 12:00:00.002000]

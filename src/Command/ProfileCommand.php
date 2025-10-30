@@ -4,6 +4,10 @@ namespace Psy\Command;
 
 use Psy\Input\CodeArgument;
 use Psy\Exception\RuntimeException;
+use Psy\Profiling\ProfilerEngine;
+use Psy\Profiling\XhprofEngine;
+use Psy\Profiling\XdebugInProcessEngine;
+use Psy\Profiling\XdebugSubprocessEngine;
 use Symfony\Component\Console\Helper\Table;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -69,20 +73,20 @@ HELP
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        if (!\extension_loaded('xhprof') && !\extension_loaded('xdebug')) {
-            throw new RuntimeException(
-                'XHProf or XDebug extension is not loaded. The profile command requires either extension to be installed and enabled.\n' .
-                'Install XHProf with: pecl install xhprof\n' .
-                'Or use XDebug for profiling functionality.'
-            );
+        $code = $input->getArgument('code');
+        if (strpos($code, '@') === 0) {
+            $filePath = substr($code, 1);
+            if (!file_exists($filePath)) {
+                throw new RuntimeException(sprintf('File not found: %s', $filePath));
+            }
+            $code = file_get_contents($filePath);
         }
 
-        dump($input->getOptions());
-
-        $code = $input->getArgument('code');
+        // Parse options
+        $code = $this->normalizeInlineCode($code);
         $outFile = $input->getOption('out');
         $filterLevel = $input->getOption('full') ? 'all' : $input->getOption('filter');
-        $threshold = (int) $input->getOption('threshold');
+        $threshold = max(0, (int) $input->getOption('threshold'));
         $showParams = $input->getOption('show-params');
         $fullNamespaces = $input->getOption('full-namespaces');
         $traceAll = $input->getOption('trace-all');
@@ -91,638 +95,123 @@ HELP
         $shell = $this->getShell();
 
         if ($debug) {
-            $output->writeln(sprintf('<comment>Debug: filterLevel=%s, showAll=%s, showParams=%s, fullNamespaces=%s, traceAll=%s</comment>', 
-                $filterLevel,
-                ($filterLevel === 'all') ? 'true' : 'false',
-                $showParams ? 'true' : 'false',
-                $fullNamespaces ? 'true' : 'false', 
-                $traceAll ? 'true' : 'false'
+            $output->writeln(sprintf('<comment>Debug mode enabled. Options: filter=%s, threshold=%dμs, params=%s, namespaces=%s, trace-all=%s</comment>',
+                $filterLevel, $threshold,
+                $showParams ? 'yes' : 'no',
+                $fullNamespaces ? 'full' : 'short',
+                $traceAll ? 'yes' : 'no'
             ));
         }
 
-        $profile_data = [];
-        $success = false;
-
+        // Select engine
         try {
-            if ($traceAll) {
-                $profile_data = $this->executeWithXdebugTracing($code, $filterLevel, $output, $debug);
-                $success = true;
+            $engine = $this->selectEngine($traceAll, $debug, $output);
+        } catch (RuntimeException $e) {
+            throw new RuntimeException(
+                'Profiling not available: ' . $e->getMessage() . "\n\n" .
+                "Available options:\n" .
+                "1. Install XHProf: pecl install xhprof\n" .
+                "2. Enable Xdebug trace mode: XDEBUG_MODE=trace,develop php ...\n" .
+                "3. Use subprocess engine (enabled automatically when available)\n\n" .
+                "Current Xdebug mode: " . (extension_loaded('xdebug') ? ini_get('xdebug.mode') : 'not loaded')
+            );
+        }
+
+        if ($debug) {
+            $output->writeln(sprintf('<comment>Selected engine: %s</comment>', $engine->getName()));
+        }
+
+        // Execute profiling
+        try {
+            $profileData = $engine->profile($code, $shell, $debug);
+            if ($debug) {
+                $output->writeln(sprintf('<comment>Profiling complete: %d functions recorded</comment>', count($profileData)));
+            }
+        } catch (RuntimeException $e) {
+            throw new RuntimeException('Profiling execution failed: ' . $e->getMessage());
+        }
+
+        if (empty($profileData)) {
+            $output->writeln('<warning>No profiling data collected</warning>');
+            $output->writeln('');
+            $output->writeln('<comment>This may happen because:</comment>');
+            $output->writeln('<comment>1. The code executed too quickly (try more complex code)</comment>');
+            $output->writeln('<comment>2. Xdebug trace mode is not properly enabled</comment>');
+            $output->writeln('<comment>3. The profiler is filtering out all functions</comment>');
+            $output->writeln('');
+            $output->writeln('<info>Try running with --debug flag for more information:</info>');
+            $output->writeln('<info>  profile --debug your_code()</info>');
+            return 0;
+        }
+
+        // Display results
+        $this->displayResults($profileData, $output, $filterLevel, $threshold, $showParams, $fullNamespaces);
+
+        // Save if requested
+        if ($outFile) {
+            $this->saveProfileData($profileData, $outFile, $output);
+        }
+
+        return 0;
+    }
+
+    /**
+     * Select the best available profiling engine.
+     */
+    private function selectEngine(bool $traceAll, bool $debug, OutputInterface $output): ProfilerEngine
+    {
+        // 1. If --trace-all: use XdebugSubprocessEngine
+        if ($traceAll) {
+            if (XdebugSubprocessEngine::isAvailable()) {
+                if ($debug) {
+                    $output->writeln('<comment>Xdebug available (subprocess mode) (forced by --trace-all)</comment>');
+                }
+                return new XdebugSubprocessEngine();
             } else {
-                // Define the profiling wrapper for XHProf
-                $profilingWrapper = function ($closure, $throwExceptions) use ($output, $debug) {
-                    $profileData = [];
-
-                    if (function_exists('xhprof_enable')) {
-                        xhprof_enable(XHPROF_FLAGS_CPU + XHPROF_FLAGS_MEMORY);
-                    }
-
-                    try {
-                        $closure->execute();
-                    } catch (\Throwable $e) {
-                        // Re-throw the exception after profiling is done
-                        throw $e;
-                    } finally {
-                        if (function_exists('xhprof_disable')) {
-                            $profileData = xhprof_disable();
-                        }
-                    }
-
-                    return $profileData;
-                };
-
-                // Set the wrapper on the Shell
-                $shell->setCodeExecutionWrapper($profilingWrapper);
-
-                try {
-                    // Execute the code through the shell, which will use our wrapper
-                    $profile_data = $shell->execute($code, true); // Always throw exceptions here
-                    $success = true;
-                } catch (\Throwable $e) {
-                    if ($debug) {
-                        $output->writeln(sprintf('<error>An error occurred during profiling: %s</error>', $e->getMessage()));
-                    }
-                    throw $e; // Re-throw the exception to be handled by the shell
-                } finally {
-                    // Always reset the wrapper after execution
-                    $shell->setCodeExecutionWrapper(null);
-                }
+                throw new RuntimeException('Xdebug extension is not available for subprocess tracing, required by --trace-all.');
             }
-        } catch (\Throwable $e) {
+        }
+
+        // 2. Else if XhprofEngine::isAvailable(): use XhprofEngine (in-process, preferred)
+        if (XhprofEngine::isAvailable()) {
             if ($debug) {
-                $output->writeln(sprintf('<error>An error occurred during profiling: %s</error>', $e->getMessage()));
+                $output->writeln('<comment>XHProf available (in-process)</comment>');
             }
-            throw $e; // Re-throw the exception to be handled by the shell
+            return new XhprofEngine();
         }
-        
-        if ($success) {
-            // Debug: afficher les données brutes si demandé
-            if ($debug && $output->getVerbosity() >= OutputInterface::VERBOSITY_DEBUG) {
-                $output->writeln('<comment>Raw profile data keys:</comment>');
-                foreach (array_keys($profile_data) as $key) {
-                    $output->writeln("  $key");
-                }
+
+        // 3. Else if XdebugInProcessEngine::isAvailable(): use XdebugInProcessEngine
+        if (XdebugInProcessEngine::isAvailable()) {
+            if ($debug) {
+                $output->writeln('<comment>Xdebug available for in-process tracing</comment>');
             }
-            
-            // Filtrer et formater les résultats avec le bon niveau de filtrage
-            $showAll = ($filterLevel === 'all');
-            $filtered_data = $this->filterProfileData($profile_data, $showAll);
-            
-            // Afficher les résultats
-            $this->displayResults($filtered_data, $output, $filterLevel, $threshold, $showParams, $fullNamespaces);
-            
-            // Sauvegarder le rapport complet si demandé
-            if ($outFile) {
-                $this->saveProfileData($profile_data, $outFile, $output);
-            }
+            return new XdebugInProcessEngine();
         }
-        
-        return $success ? 0 : 1;
+
+        // 4. Else if XdebugSubprocessEngine::isAvailable(): use XdebugSubprocessEngine
+        if (XdebugSubprocessEngine::isAvailable()) {
+            if ($debug) {
+                $output->writeln('<comment>Xdebug available (subprocess mode)</comment>');
+            }
+            return new XdebugSubprocessEngine();
+        }
+
+        // 5. Else: throw RuntimeException with detailed diagnostics
+        $diagnostics = $this->getDiagnostics();
+        throw new RuntimeException('Neither XHProf nor Xdebug extension is available for profiling' . "\n\n" . $diagnostics);
     }
 
-
-    
-
-    
-    
-    private function canVarExport($value): bool
+    private function normalizeInlineCode(string $code): string
     {
-        return is_scalar($value) || is_null($value) || 
-               (is_array($value) && $this->isArrayVarExportable($value));
-    }
-    
-    private function isArrayVarExportable(array $array): bool
-    {
-        foreach ($array as $item) {
-            if (!is_scalar($item) && !is_null($item) && !is_array($item)) {
-                return false;
-            }
-            if (is_array($item) && !$this->isArrayVarExportable($item)) {
-                return false;
-            }
-        }
-        return true;
-    }
-    
-    private function captureEnvironmentVariables(array &$context): void
-    {
-        // Variables d'environnement importantes pour les frameworks
-        $importantEnvVars = [
-            'APP_ENV', 'APP_DEBUG', 'APP_KEY', 'APP_URL',           // Laravel/Symfony
-            'DATABASE_URL', 'DATABASE_HOST', 'DATABASE_NAME',       // Database
-            'SYMFONY_ENV', 'KERNEL_CLASS',                          // Symfony
-            'WP_ENV', 'WP_HOME', 'WP_SITEURL',                     // WordPress
-            'COMPOSER_HOME', 'COMPOSER_CACHE_DIR',                  // Composer
-        ];
-        
-        foreach ($importantEnvVars as $envVar) {
-            $value = getenv($envVar);
-            if ($value !== false && is_string($value)) {
-                try {
-                    $context[] = sprintf("putenv(%s);", var_export("$envVar=$value", true));
-                    $context[] = sprintf("\$_ENV[%s] = %s;", var_export($envVar, true), var_export($value, true));
-                    $context[] = sprintf("\$_SERVER[%s] = %s;", var_export($envVar, true), var_export($value, true));
-                } catch (\Exception $e) {
-                    $context[] = sprintf("// Environment variable %s could not be serialized: %s", $envVar, $e->getMessage());
-                }
-            }
-        }
-    }
-    
-    private function captureShellVariables($shell, array &$context): void
-    {
-        $vars = $shell->getScopeVariables();
-
-        foreach ($vars as $name => $value) {
-            if (in_array($name, ['this', '_', '_e', '__out', '__class', '__namespace'])) {
-                continue;
-            }
-
-            if ($value instanceof \Closure) {
-                $reflector = new \ReflectionFunction($value);
-                if ($reflector->getFileName() && str_contains($reflector->getFileName(), 'eval()\'d code')) {
-                    $context[] = sprintf("// Closure \$%s ignored (defined in eval()\'d code)", $name);
-                    continue;
-                }
-
-                // Vérifier si opis/closure est disponible et si la closure est sérialisable
-                if (function_exists('\Opis\Closure\serialize') && $this->isSerializableClosure($value)) {
-                    try {
-                        $serialized = \Opis\Closure\serialize($value);
-                        $context[] = sprintf(
-                            '$%s = \Opis\Closure\unserialize(%s);',
-                            $name,
-                            var_export($serialized, true)
-                        );
-                    } catch (\Exception $e) {
-                        $context[] = sprintf("// Closure \$%s could not be serialized: %s", $name, $e->getMessage());
-                    }
-                } else {
-                    $context[] = sprintf("// Closure \$%s ignored - not serializable or opis/closure not available", $name);
-                }
-            } elseif (is_object($value)) {
-                $serialized = @serialize($value);
-                if ($serialized !== false) {
-                    $context[] = sprintf('$%s = unserialize(%s);', $name, var_export($serialized, true));
-                } else {
-                    $context[] = sprintf("// Object \$%s of class %s could not be serialized.", $name, get_class($value));
-                }
-            } elseif ($this->isSerializable($value)) {
-                try {
-                    $context[] = sprintf('$%s = %s;', $name, var_export($value, true));
-                } catch (\Exception $e) {
-                    $context[] = sprintf("// Variable \$%s could not be serialized: %s", $name, $e->getMessage());
-                }
-            }
-        }
-    }
-    
-    private function captureShellConstants(array &$context): void
-    {
-        // Capturer les constantes définies par l'utilisateur (pas les constantes système)
-        $userConstants = get_defined_constants(true)['user'] ?? [];
-        
-        foreach ($userConstants as $name => $value) {
-            if ($this->isSerializable($value)) {
-                try {
-                    $context[] = sprintf("if (!defined(%s)) define(%s, %s);", 
-                        var_export($name, true), 
-                        var_export($name, true), 
-                        var_export($value, true)
-                    );
-                } catch (\Exception $e) {
-                    $context[] = sprintf("// Constant %s could not be serialized: %s", $name, $e->getMessage());
-                }
-            }
-        }
-    }
-    
-    private function isComplexObject($object): bool
-    {
-        if (!is_object($object)) {
-            return false;
-        }
-        
-        $className = get_class($object);
-        
-        // Objets framework considérés comme complexes
-        $complexPatterns = [
-            'Symfony\\',
-            'Doctrine\\',
-            'Illuminate\\',
-            'Laravel\\',
-            'Psr\\',
-            'Monolog\\',
-            'Twig\\',
-            'PDO',
-            'mysqli',
-            'Redis',
-            'Memcached'
-        ];
-        
-        foreach ($complexPatterns as $pattern) {
-            if (str_contains($className, $pattern)) {
-                return true;
-            }
-        }
-        
-        // Objets avec resources sont complexes
-        $reflection = new \ReflectionClass($className);
-        foreach ($reflection->getProperties() as $property) {
-            $property->setAccessible(true);
-            try {
-                $value = $property->getValue($object);
-                if (is_resource($value)) {
-                    return true;
-                }
-            } catch (\Exception $e) {
-                // Property not accessible, assume complex
-                return true;
-            }
-        }
-        
-        return false;
-    }
-
-    private function isSerializable($value): bool
-    {
-        // Accepter seulement les types simples et les tableaux de types simples
-        if (is_scalar($value) || is_null($value)) {
-            return true;
-        }
-        
-        if (is_array($value)) {
-            // Vérifier récursivement pour les tableaux
-            foreach ($value as $item) {
-                if (!$this->isSerializable($item)) {
-                    return false;
-                }
-            }
-            return true;
-        }
-        
-        // Rejeter tous les objets (y compris DateTime), resources, etc.
-        if (is_object($value) || is_resource($value)) {
-            return false;
-        }
-        
-        return false;
-    }
-
-    
-    /**
-     * Vérifie si une closure peut être sérialisée en toute sécurité
-     */
-    private function isSerializableClosure(\Closure $closure): bool
-    {
-        try {
-            $reflector = new \ReflectionFunction($closure);
-
-            // Éviter les closures internes
-            if ($reflector->isInternal()) {
-                return false;
-            }
-
-            // Éviter les closures définies dans le code évalué (eval()'d code)
-            if ($reflector->getFileName() && str_contains($reflector->getFileName(), "eval()'d code")) {
-                return false;
-            }
-
-            return true;
-        } catch (\Throwable $e) {
-            return false;
-        }
-    }
-
-    private function captureShellDefinedClasses(): string
-    {
-        $classDefinitions = [];
-        
-        // Récupérer toutes les classes définies
-        $definedClasses = get_declared_classes();
-        
-        foreach ($definedClasses as $className) {
-            try {
-                $reflection = new \ReflectionClass($className);
-                $filename = $reflection->getFileName();
-                
-                // Si la classe vient d'un eval (définie dans le shell)
-                if ($filename === false || strpos($filename, 'eval()\'d code') !== false) {
-                    // Tenter de reconstruire la classe à partir de sa réflection
-                    $classCode = $this->reconstructClassFromReflection($reflection);
-                    if ($classCode) {
-                        $classDefinitions[] = $classCode;
-                    }
-                }
-            } catch (\Exception $e) {
-                // Ignorer les erreurs de réflection
-            }
-        }
-        
-        return implode("\n\n", $classDefinitions);
-    }
-
-    private function reconstructClassFromReflection(\ReflectionClass $reflection): ?string
-    {
-        try {
-            $className = $reflection->getShortName();
-            $namespace = $reflection->getNamespaceName();
-            
-            $code = '';
-            if (!empty($namespace)) {
-                $code .= "namespace {$namespace};\n\n";
-            }
-            
-            $code .= "class {$className} {\n";
-            
-            // Ajouter toutes les méthodes avec leurs signatures
-            foreach ($reflection->getMethods() as $method) {
-                if ($method->getDeclaringClass()->getName() === $reflection->getName() && !$method->isConstructor()) {
-                    $methodName = $method->getName();
-                    $params = [];
-                    
-                    foreach ($method->getParameters() as $param) {
-                        $paramStr = '$' . $param->getName();
-                        try {
-                            if ($param->isDefaultValueAvailable()) {
-                                $defaultValue = $param->getDefaultValue();
-                                if (is_scalar($defaultValue) || is_null($defaultValue)) {
-                                    $default = var_export($defaultValue, true);
-                                    $paramStr .= " = {$default}";
-                                }
-                            }
-                        } catch (\Exception $e) {
-                            // Ignorer les erreurs de valeur par défaut
-                        }
-                        $params[] = $paramStr;
-                    }
-                    
-                    $paramList = implode(', ', $params);
-                    $visibility = $method->isPublic() ? 'public' : ($method->isProtected() ? 'protected' : 'private');
-                    $code .= "    {$visibility} function {$methodName}({$paramList}) {\n";
-                    $code .= "        // Méthode reconstruite - comportement basique\n";
-                    
-                    // Logique spécifique pour BinaryCalculator
-                    if ($methodName === 'toBinary') {
-                        $code .= "        return \$this->convert(\$num);\n";
-                    } elseif ($methodName === 'convert') {
-                        $code .= "        return decbin(\$num);\n";
-                    } elseif ($methodName === 'fromBinary') {
-                        $code .= "        return bindec(\$binary);\n";
-                    } elseif ($methodName === 'binaryAdd') {
-                        $code .= "        return decbin(bindec(\$a) + bindec(\$b));\n";
-                    } else {
-                        $code .= "        throw new \\Exception('Méthode {$methodName} non implémentée dans le contexte profile');\n";
-                    }
-                    
-                    $code .= "    }\n\n";
-                }
-            }
-            
-            $code .= "}\n";
+        $trimmed = rtrim($code);
+        if ($trimmed === '') {
             return $code;
-            
-        } catch (\Exception $e) {
-            return null;
         }
-    }
-
-    
-
-    /**
-     * Generate the full PHP script to be executed for profiling.
-     * This script includes the full shell context and wraps the user code
-     * with profiler start/stop calls.
-     */
-    
-
-    private function executeWithXdebugTracing(string $code, string $filterLevel, OutputInterface $output, bool $debug = false): array
-    {
-        // Vérifier que Xdebug est disponible ET que les fonctions de tracing sont disponibles
-        if (!extension_loaded('xdebug')) {
-            throw new RuntimeException('Xdebug extension is not loaded. Required for --trace-all option.');
+        $last = substr($trimmed, -1);
+        if ($last !== ';' && $last !== '}' && $last !== ':') {
+            return $trimmed . ';';
         }
-        
-        if (!function_exists('xdebug_start_trace')) {
-            throw new RuntimeException('Xdebug trace functions not available. Please compile Xdebug with trace support.');
-        }
-
-        $shell = $this->getShell();
-        $tmpDir = sys_get_temp_dir();
-        $traceFile = null;
-
-        // Define the Xdebug tracing wrapper
-        $tracingWrapper = function ($closure, $throwExceptions) use ($tmpDir, &$traceFile, $output, $debug) {
-            // Configure Xdebug for tracing
-            ini_set('xdebug.mode', 'trace');
-            ini_set('xdebug.start_with_request', 'no');
-            ini_set('xdebug.output_dir', $tmpDir);
-            ini_set('xdebug.trace_output_name', 'trace.%t.%p');
-            ini_set('xdebug.trace_format', '1'); // Human readable format
-            ini_set('xdebug.collect_params', '4'); // Capture full variable contents
-            ini_set('xdebug.collect_return', '1');
-            ini_set('xdebug.trace_options', '1'); // Add timestamps
-
-            if ($debug) {
-                $output->writeln('<comment>Xdebug trace configured, starting trace...</comment>');
-            }
-
-            // Start tracing
-            $traceFile = xdebug_start_trace();
-
-            try {
-                $closure->execute();
-            } catch (\Throwable $e) {
-                throw $e;
-            } finally {
-                // Stop tracing and get the trace file path
-                $stoppedFile = xdebug_stop_trace();
-                if ($debug) {
-                    $output->writeln(sprintf('<comment>Trace stopped. File: %s</comment>', $stoppedFile ?? 'null'));
-                }
-                if ($stoppedFile && $stoppedFile !== $traceFile) {
-                    $traceFile = $stoppedFile;
-                }
-            }
-
-            return $traceFile; // Return the trace file path
-        };
-
-        // Set the wrapper on the Shell
-        $shell->setCodeExecutionWrapper($tracingWrapper);
-
-        try {
-            // Execute the code through the shell, which will use our wrapper
-            $traceFile = $shell->execute($code, true); // Always throw exceptions here
-
-            if (!$traceFile || !file_exists($traceFile)) {
-                if ($debug) {
-                    $output->writeln(sprintf('<error>Trace file not found: %s</error>', $traceFile ?? 'null'));
-                }
-                throw new RuntimeException('Xdebug trace file was not generated. Check Xdebug configuration.');
-            }
-
-            if ($debug) {
-                $output->writeln(sprintf('<comment>Parsing trace file: %s</comment>', $traceFile));
-            }
-
-            // Parse the Xdebug trace file
-            $traceData = $this->parseXdebugTrace($traceFile);
-
-            return $traceData;
-        } catch (\Throwable $e) {
-            if ($debug) {
-                $output->writeln(sprintf('<error>An error occurred during Xdebug tracing: %s</error>', $e->getMessage()));
-            }
-            throw $e;
-        } finally {
-            // Always reset the wrapper after execution
-            $shell->setCodeExecutionWrapper(null);
-            // Clean up the trace file
-            if ($traceFile && file_exists($traceFile)) {
-                @unlink($traceFile);
-            }
-        }
-    }
-
-    private function parseXdebugTrace(string $traceFile): array
-    {
-        $content = file_get_contents($traceFile);
-        $lines = explode("\n", $content);
-        
-        $functions = [];
-        $callStack = [];
-        
-        foreach ($lines as $line) {
-            if (empty(trim($line))) continue;
-            
-            // Format Xdebug: Level -> Time Memory Function Location
-            if (preg_match('/^(\s*)(\d+)\s+(\d+\.\d+)\s+(\d+)\s+(->|::)?\s*(.+?)(?:\s+(.+))?$/', trim($line), $matches)) {
-                $depth = strlen($matches[1]);
-                $level = $matches[2];
-                $time = (float)$matches[3] * 1000000; // Convertir en microsecondes
-                $memory = (int)$matches[4];
-                $direction = $matches[5] ?? '';
-                $functionName = $matches[6] ?? '';
-                
-                if ($direction === '->') {
-                    // Entrée de fonction
-                    $callStack[$level] = [
-                        'name' => $functionName,
-                        'start_time' => $time,
-                        'start_memory' => $memory
-                    ];
-                } elseif ($direction === '::' || (isset($callStack[$level]) && empty($direction))) {
-                    // Sortie de fonction
-                    if (isset($callStack[$level])) {
-                        $call = $callStack[$level];
-                        $duration = $time - $call['start_time'];
-                        $memoryDelta = $memory - $call['start_memory'];
-                        
-                        if (!isset($functions[$call['name']])) {
-                            $functions[$call['name']] = [
-                                'calls' => 0,
-                                'time' => 0,
-                                'memory' => 0,
-                                'peak_memory' => 0,
-                                'cpu_time' => 0
-                            ];
-                        }
-                        
-                        $functions[$call['name']]['calls']++;
-                        $functions[$call['name']]['time'] += $duration;
-                        $functions[$call['name']]['memory'] += $memoryDelta;
-                        $functions[$call['name']]['cpu_time'] += $duration;
-                        
-                        unset($callStack[$level]);
-                    }
-                }
-            }
-        }
-        
-        return $this->enhanceWithCallGraph($functions);
-    }
-
-    private function parseCachegrindEnhanced(string $file, array $metrics): array
-    {
-        $content = file_get_contents($file);
-        $lines = explode("\n", $content);
-        
-        $functions = [];
-        $currentFunction = null;
-        $files = [];
-        
-        foreach ($lines as $line) {
-            // Parser les définitions de fichiers
-            if (preg_match('/^fl=\((\d+)\)\s+(.+)$/', $line, $matches)) {
-                $files[$matches[1]] = $matches[2];
-                continue;
-            }
-            
-            // Parser les définitions de fonctions
-            if (preg_match('/^fn=\((\d+)\)\s+(.+)$/', $line, $matches)) {
-                $currentFunction = [
-                    'name' => $matches[2],
-                    'calls' => 0,
-                    'time' => 0,
-                    'memory' => 0,
-                    'file_id' => null,
-                    'is_user' => false,
-                ];
-                continue;
-            }
-            
-            // Parser les données de temps/mémoire
-            if ($currentFunction && preg_match('/^(\d+)\s+(\d+)\s+(\d+)$/', $line, $matches)) {
-                $currentFunction['time'] += (int)$matches[2];
-                $currentFunction['memory'] += (int)$matches[3];
-                $currentFunction['calls']++;
-                
-                // Déterminer si c'est du code utilisateur
-                if (isset($files[$currentFunction['file_id']])) {
-                    $file = $files[$currentFunction['file_id']];
-                    $currentFunction['is_user'] = !$this->isPsyshCode($file, $currentFunction['name']);
-                }
-                
-                $functions[$currentFunction['name']] = $currentFunction;
-            }
-        }
-        
-        return $this->enhanceWithCallGraph($functions);
-    }
-
-    private function isPsyshCode(string $file, string $function): bool
-    {
-        // Vérifier si c'est du code PsySH par le namespace
-        foreach (self::PSYSH_NAMESPACES as $namespace) {
-            if (str_starts_with($function, $namespace)) {
-                return true;
-            }
-        }
-        
-        // Vérifier par le fichier
-        if (str_contains($file, 'vendor/psy/psysh')) {
-            return true;
-        }
-        
-        return false;
-    }
-
-    private function enhanceWithCallGraph(array $functions): array
-    {
-        // Calculer les temps exclusifs et construire l'arbre d'appels
-        $enhanced = [];
-        $totalTime = array_sum(array_column($functions, 'time'));
-        $totalMemory = array_sum(array_column($functions, 'memory'));
-        
-        foreach ($functions as $name => $data) {
-            $enhanced[$name] = $data + [
-                'time_percent' => $totalTime > 0 ? ($data['time'] / $totalTime) * 100 : 0,
-                'memory_percent' => $totalMemory > 0 ? ($data['memory'] / $totalMemory) * 100 : 0,
-                'is_user' => $this->isUserFunction($name),
-            ];
-        }
-        
-        return $enhanced;
+        return $trimmed;
     }
 
     private function displayResults(array $data, OutputInterface $output, string $filterLevel, int $threshold, bool $showParams = false, bool $fullNamespaces = false): void
@@ -833,30 +322,45 @@ HELP
     private function filterFunctions(array $functions, string $filterLevel, int $threshold): array
     {
         return array_filter($functions, function($func, $name) use ($filterLevel, $threshold) {
-            // Filtre par seuil de temps
+            // Filter by time threshold
             if ($func['time'] < $threshold) {
                 return false;
             }
-            
-            // Filtre par niveau
+
+            // Filter by level
             switch ($filterLevel) {
                 case 'user':
-                    // En mode user, inclure le code utilisateur ET les fonctions PHP appelées directement
-                    return $func['is_user'] || $this->isDirectlyCalledFunction($name);
+                    // Show only user-defined functions and methods.
+                    return $func['is_user'];
                 case 'php':
-                    return $func['is_user'] || !$this->isInternalFunction($name);
+                    // Show user code + all native PHP functions.
+                    return $func['is_user'] || $this->isInternalFunction($name);
                 case 'all':
                     return true;
             }
-            
+
             return false;
         }, ARRAY_FILTER_USE_BOTH);
     }
 
     private function isInternalFunction(string $name): bool
     {
-        // Fonctions PHP internes n'ont pas de namespace
-        return !str_contains($name, '\\') && !str_contains($name, '::');
+        // Methods and namespaced functions are not considered internal built-in functions.
+        if (str_contains($name, '::') || str_contains($name, '\\')) {
+            return false;
+        }
+
+        // Check if it's a built-in PHP function using reflection.
+        if (!function_exists($name)) {
+            return false;
+        }
+
+        try {
+            $reflection = new \ReflectionFunction($name);
+            return $reflection->isInternal();
+        } catch (\ReflectionException $e) {
+            return false;
+        }
     }
 
     private function isUserFunction(string $name): bool
@@ -882,27 +386,7 @@ HELP
         return true;
     }
 
-    private function isDirectlyCalledFunction(string $name): bool
-    {
-        // Liste des fonctions PHP internes couramment utilisées qu'on veut voir par défaut
-        $commonFunctions = [
-            'sleep', 'usleep', 'time_nanosleep',
-            'strlen', 'substr', 'strpos', 'str_replace',
-            'array_map', 'array_filter', 'array_reduce',
-            'json_encode', 'json_decode',
-            'file_get_contents', 'file_put_contents',
-            'curl_exec', 'curl_init',
-            'mysqli_query', 'mysql_query',
-            'hash', 'hash_hmac',
-            'openssl_encrypt', 'openssl_decrypt',
-            'preg_match', 'preg_replace',
-            'explode', 'implode',
-            'count', 'sizeof',
-            'microtime', 'gettimeofday'
-        ];
-        
-        return in_array($name, $commonFunctions);
-    }
+
 
     private function formatFunctionName(string $name): string
     {
@@ -929,24 +413,6 @@ HELP
         }
         
         return $name;
-    }
-
-    private function prepareContext($shell): array
-    {
-        // Récupérer toutes les variables du contexte actuel
-        $variables = $shell->getScopeVariables();
-        
-        // Exclure les variables spéciales de PsySH
-        $excludedVars = ['this', '_', '_e'];
-        $variables = array_diff_key($variables, array_flip($excludedVars));
-        
-        // Récupérer les fichiers inclus
-        $includes = $shell->getIncludes();
-        
-        return [
-            'variables' => $variables,
-            'includes' => $includes,
-        ];
     }
 
     private function filterProfileData(array $data, bool $showAll = false): array
@@ -1005,29 +471,6 @@ HELP
         return $this->enhanceWithCallGraph($filtered);
     }
 
-    private function isProfilingSystemCall(?string $parent, string $child): bool
-    {
-        // Liste des fonctions internes au profilage
-        $profilingFunctions = [
-            'Psy\\Command\\ProfileCommand::execute',
-            'Psy\\Command\\ProfileCommand::displayResults',
-            'Psy\\Command\\ProfileCommand::filterProfileData',
-            'Psy\\Command\\ProfileCommand::enhanceWithCallGraph',
-            'Psy\\Command\\ProfileCommand::filterFunctions',
-        ];
-
-        if (in_array($parent, $profilingFunctions)) {
-            // Si le parent est une fonction de profilage, on ignore l'enfant
-            return true;
-        }
-
-        // Ignorer les appels à `eval` qui viennent de notre commande
-        if ($child === 'eval' && $parent !== null && str_starts_with($parent, 'Psy\\Command\\ProfileCommand')) {
-            return true;
-        }
-
-        return false;
-    }
 
     private function extractFunctionParams(string $functionName): string
     {
@@ -1085,15 +528,30 @@ HELP
         return '';
     }
 
-    private function formatBytes(int $bytes): string
+    
+    private function normalizeProfile(array $profile, bool $showAll): array
     {
-        $units = ['B', 'KB', 'MB', 'GB', 'TB'];
-        $i = 0;
-        while ($bytes >= 1024 && $i < count($units) - 1) {
-            $bytes /= 1024;
-            $i++;
+        // Cas XHProf: entrées de type parent==>child avec clés ct/wt/mu
+        $isXhprof = false;
+        if (!empty($profile)) {
+            $first = reset($profile);
+            if (is_array($first) && (array_key_exists('ct', $first) || array_key_exists('wt', $first))) {
+                $isXhprof = true;
+            }
         }
-        return round($bytes, 2) . ' ' . $units[$i];
+
+        if ($isXhprof) {
+            return $this->filterProfileData($profile, $showAll);
+        }
+
+        // Déjà agrégé (Xdebug parser): s'assurer des pourcentages
+        $hasPercents = false;
+        if (!empty($profile)) {
+            $first = reset($profile);
+            $hasPercents = is_array($first) && array_key_exists('time_percent', $first);
+        }
+
+        return $hasPercents ? $profile : $this->enhanceWithCallGraph($profile);
     }
     
     /**
@@ -1182,7 +640,7 @@ HELP
         if (file_put_contents($outFile, $jsonData) !== false) {
             $output->writeln(sprintf('<info>Profile data saved to: %s</info>', $outFile));
         } else {
-            $output->writeln('<error>Failed to save profile data</error>');
+            $output->writeln('<error>failed to save profile data</error>');
         }
     }
     
@@ -1268,5 +726,52 @@ HELP
         }
         
         return true;
+    }
+
+    /**
+     * Get diagnostic information about available profiling engines.
+     */
+    private function getDiagnostics(): string
+    {
+        $lines = ['Diagnostic information:'];
+        
+        // Check Xdebug
+        if (extension_loaded('xdebug')) {
+            $lines[] = '✓ Xdebug extension is loaded';
+            $mode = ini_get('xdebug.mode');
+            $lines[] = sprintf('  Current mode: %s', $mode ?: '(none)');
+            
+            if (!str_contains($mode, 'trace')) {
+                $lines[] = '  ⚠️  PROBLEM: Xdebug trace mode is NOT enabled';
+                $lines[] = '';
+                $lines[] = '  To fix this, restart PHP with trace mode:';
+                $lines[] = '    XDEBUG_MODE=trace,develop php your-script.php';
+                $lines[] = '  Or for PsySH:';
+                $lines[] = '    XDEBUG_MODE=trace,develop ./bin/psysh';
+            } else {
+                $lines[] = '  ✓ Trace mode is enabled';
+            }
+            
+            // Check if xdebug_start_trace function exists
+            if (function_exists('xdebug_start_trace')) {
+                $lines[] = '  ✓ xdebug_start_trace() is available';
+            } else {
+                $lines[] = '  ✗ xdebug_start_trace() is NOT available';
+            }
+        } else {
+            $lines[] = '✗ Xdebug extension is NOT loaded';
+        }
+        
+        $lines[] = '';
+        
+        // Check XHProf
+        if (extension_loaded('xhprof')) {
+            $lines[] = '✓ XHProf extension is loaded';
+        } else {
+            $lines[] = '✗ XHProf extension is NOT loaded';
+            $lines[] = '  Install with: pecl install xhprof';
+        }
+        
+        return implode("\n", $lines);
     }
 }

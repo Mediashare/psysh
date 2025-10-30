@@ -1,0 +1,12 @@
+Version: 3.1.0
+File format: 1
+TRACE START [2024-10-29 10:00:00.000000]
+0	0.0001	1024	->	main()	/tmp/test.php:1
+1	0.0002	2048	->	parent_function()	/tmp/test.php:5
+2	0.0003	3072	->	child_function()	/tmp/test.php:10
+2	0.0006	3072	<-	child_function()	/tmp/test.php:10
+2	0.0007	3072	->	another_child()	/tmp/test.php:11
+2	0.0009	3072	<-	another_child()	/tmp/test.php:11
+1	0.0010	2048	<-	parent_function()	/tmp/test.php:5
+0	0.0011	1024	<-	main()	/tmp/test.php:1
+TRACE END   [2024-10-29 10:00:00.011000]

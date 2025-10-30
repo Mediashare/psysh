@@ -1,0 +1,52 @@
+{
+    "{main}": {
+        "calls": 1,
+        "time": 1900,
+        "exclusive_time": 1900,
+        "memory": 0,
+        "peak_memory": 391600,
+        "cpu_time": 0,
+        "is_user": true,
+        "params": null
+    },
+    "my_function": {
+        "calls": 1,
+        "time": 300,
+        "exclusive_time": 300,
+        "memory": 0,
+        "peak_memory": 391600,
+        "cpu_time": 0,
+        "is_user": true,
+        "params": null
+    },
+    "strlen": {
+        "calls": 1,
+        "time": 100,
+        "exclusive_time": 100,
+        "memory": 0,
+        "peak_memory": 391600,
+        "cpu_time": 0,
+        "is_user": false,
+        "params": null
+    },
+    "another_function": {
+        "calls": 1,
+        "time": 1300,
+        "exclusive_time": 1300,
+        "memory": 0,
+        "peak_memory": 391600,
+        "cpu_time": 0,
+        "is_user": true,
+        "params": null
+    },
+    "usleep": {
+        "calls": 1,
+        "time": 1100,
+        "exclusive_time": 1100,
+        "memory": 0,
+        "peak_memory": 391600,
+        "cpu_time": 0,
+        "is_user": false,
+        "params": null
+    }
+}

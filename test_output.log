@@ -1,0 +1,48 @@
+spawn bin/psysh
+[90mPsy Shell v0.12.9 (PHP 8.4.14 — cli) by Justin Hileman[39m
+[90mNew version is available at psysh.org/psysh (current: v0.12.9, latest: v0.12.14)[39m
+> $myVar = 41
+[?1h=[90m= [39m[35m41[39m[m
+[m
+:[K[K:[K[K[7mNo next tag  (press RETURN)[27m[3;1H[K[K[K[K[7m(END)[27m[K[K[7mNo next tag  (press RETURN)[27m[3;1H[K[K[7m(END)[27m[K[K[K[7mlines 1-2/2 byte 26/26 (END)  (press RETURN)[27m[3;1H[K[K[7m(END)[27m[K[K[K[7m(END)[27m[K[K?[K[K[7mNo previous regular expression  (press RETURN)[27m[3;1H[K[K[7m(END)[27m[K[KBrackets: [K(([K))[K[K[7mNo bracket in top line  (press RETURN)[27m[3;1H[K[K[7m(END)[27m[K[K[7m(END)[27m[K[KBrackets: [K(([K))[K[K[7mNo bracket in bottom line  (press RETURN)[27m[3;1H[K[K[7m(END)[27m[K[K[K[7mlines 1-2/2 byte 26/26 (END)  (press RETURN)[27m[3;1H[K[K[K[7m(END)[27m[K[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K/[K[K[7mNo previous regular expression  (press RETURN)[27m[3;1H[K[K[K[7m(END)[27m[K[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K:[K..[K[7m(END)[27m[K[K[7m(END)[27m[K[K[K[7m(END)[27m[K[K[1m~[0m
+[7m(END)[27m[K[K...skipping...
+[m
+[1m~[0m
+[7m(END)[27m[K[K[7m(END)[27m[K[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[K[7m(END)[27m[K[K[K[7m(END)[27m[K[K-[K--[Kdd[K--[Kdd[Kuu[Kmm[Kbb[K[7mCannot change the -d (--dumb) option  (press RETURN)[27m[3;1H[K[K[H[2J[H[m
+[1m~[0m
+[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7mNo next tag  (press RETURN)[27m[3;1H[K[K[7m(END)[27m[K
+---
+Running complex profiling test...
+spawn bin/psysh
+[90mPsy Shell v0.12.9 (PHP 8.4.14 — cli) by Justin Hileman[39m
+[90mNew version is available at psysh.org/psysh (current: v0.12.9, latest: v0.12.14)[39m
+> class MyCalculator {
+.     public function sumAndHash(array $numbers) { 
+.         $sum = array_sum($numbers);
+.         $hash = md5($sum);
+.         return strlen($hash);
+.     }
+. }
+> $calc = new MyCalculator()
+[?1h=[90m= [39m[34;4mMyCalculator[39;24m {#4394}[m
+[m
+:[K[K[K[7mDetermining length of file... (interrupt to abort)[27m[K[K...skipping...
+[90m= [39m[34;4mMyCalculator[39;24m {#4394}[m
+[m
+[7m(END)[27m[K[K[7m(END)[27m[K[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[7m(END)[27m[K[K[K[7m(END)[27m[K[K[K[7m(END)[27m[K[K-[K--[Kdd[K--[Kdd[Kuu[Kmm[Kbb[K[7mCannot change the -d (--dumb) option  (press RETURN)[27m[3;1H[K[K[H[2J[H[H[2J[H[90m= [39m[34;4mMyCalculator[39;24m {#4394}[m
+[m
+[7m(END)[27m[K[K...skipping...
+[m
+                   [1mSUMMARY[0m [1mOF[0m [1mLESS[0m [1mCOMMANDS[0m[m
+[7mHELP -- Press RETURN for more, or q when done[27m[K[K[K[7mHELP -- Press RETURN for more, or q when done[27m[K[K[m
+      Commands marked with * may be preceded by a [m [7mHELP -- Press RETURN for more, or q when done[27m[K[K[7mHELP -- Press RETURN for more, or q when done[27m[K[K[7mHELP -- Press RETURN for more, or q when done[27m[K[K[7mHELP -- Press RETURN for more, or q when done[27m[K[K[7mHELP -- Press RETURN for more, or q when done[27m[K[K[7mHELP -- Press RETURN for more, or q when done[27m[K[K-[K[7mThere is no -> option  (press RETURN)[27m[3;1H[K[Knumber, [4mN[24m.[m
+[7mHELP -- Press RETURN for more, or q when done[27m[K[K[HM[m
+[HM                   [1mSUMMARY[0m [1mOF[0m [1mLESS[0m [1mCOMMANDS[0m[m
+[3;1H[K[7mHELP -- Press RETURN for more, or q when done[27m[K[K[7mHELP -- Press RETURN for more, or q when done[27m[K[K[7mHELP -- Press RETURN for more, or q when done[27m[K[K?[K[K[7mNo previous regular expression  (press RETURN)[27m[3;1H[K[K      Commands marked with * may be preceded by a [m number, [4mN[24m.[m
+[7mHELP -- Press RETURN for more, or q when done[27m[K[K[7mHELP -- Press RETURN for more, or q when done[27m[K[K[7mHELP -- Press RETURN for more, or q when done[27m[K[K      Notes in parentheses indicate the behavior i[m [7mHELP -- Press RETURN for more, or q when done[27m[K[K[7mHELP -- Press RETURN for more, or q when done[27m[K[KBrackets: [K(([K))[K[K[7mNo bracket in top line  (press RETURN)[27m[3;1H[K[K...skipping...
+number, [4mN[24m.[m
+      Notes in parentheses indicate the behavior i[m [7mHELP -- Press RETURN for more, or q when done[27m[K[K[7mHELP -- Press RETURN for more, or q when done[27m[K[K/[K[K[7mNo previous regular expression  (press RETURN)[27m[3;1H[K[K[H[2J[HM                   [1mSUMMARY[0m [1mOF[0m [1mLESS[0m [1mCOMMANDS[0m[m
+[HM[m
+[3;1H[K[7mHELP -- Press RETURN for more, or q when done[27m[K[K[m
+[7mHELP -- Press RETURN for more, or q when done[27m[K[KBrackets: [K(([K))[K[K[7mNo bracket in top line  (press RETURN)[27m[3;1H[K[K:[K11[K[7mHELP -- Press RETURN for more, or q when done[27m[K[K      Commands marked with * may be preceded by a [m number, [4mN[24m.[m
+[7mHELP -- Press RETURN for more, or q when done[27m[K[K:[K11[K00[K00[KBrackets: [K(([K))[K[K[7mNo bracket in bottom line  (press RETURN)[27m[3;1H[K[KBrackets: [K(([K))[K[K[7mNo bracket in bottom line  (press RETURN)[27m[3;1H[K[K[7mHELP -- Press RETURN for more, or q when done[27m[K[K      Notes in parentheses indicate the behavior i[m [7mHELP -- Press RETURN for more, or q when done[27m[K[K[7mHELP -- Press RETURN for more, or q when done[27m[K[K[7mHELP -- Press RETURN for more, or q when done[27m[K[K[7mNo next tag  (press RETURN)[27m[3;1H[K[K[7mHELP -- Press RETURN for more, or q when done[27m[KComplex profiling test passed.

@@ -56,6 +56,7 @@ class ExecutionLoopClosure extends ExecutionClosure
                                 $__psysh__->runCommand($code);
                                 $_ = null; // Command output is handled by the command itself
                             } else {
+                                $__psysh__->addToExecutedCodeHistory($code);
                                 $_ = eval($code ?: ExecutionClosure::NOOP_INPUT);
                             }
                         } else {

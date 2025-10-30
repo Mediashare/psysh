@@ -1809,49 +1809,35 @@ class Shell extends Application
         }
     }
 
-    /**
-     * Ajouter du code à l'historique d'exécution
-     */
-    private function addToExecutedCodeHistory(string $code): void
+    public function addToExecutedCodeHistory(string $code): void
     {
-        // Nettoyer le code et ne stocker que les définitions importantes
         $trimmedCode = trim($code);
-        
-        // Stocker seulement les définitions de classes, interfaces, traits, fonctions, constantes
-        if ($this->isDefinitionCode($trimmedCode)) {
-            $this->executedCodeHistory[] = [
-                'code' => $trimmedCode,
-                'timestamp' => microtime(true),
-                'type' => $this->getCodeType($trimmedCode)
-            ];
-            
-            // Limiter l'historique à 100 entrées pour éviter une consommation excessive de mémoire
-            if (count($this->executedCodeHistory) > 100) {
-                array_shift($this->executedCodeHistory);
+
+        try {
+            // Use a simple regex to avoid parsing for simple cases
+            if (preg_match('/^return\s+(.*);$/s', $trimmedCode, $matches)) {
+                $trimmedCode = $matches[1];
             }
+
+            $trimmedCode = str_replace('return new \Psy\CodeCleaner\NoReturnValue();', '', $trimmedCode);
+
+            if (substr(trim($trimmedCode), -1) !== ';') {
+                $trimmedCode .= ';';
+            }
+
+        } catch (\Exception $e) {
+            // ignore errors, just use the original code
         }
-    }
 
-    /**
-     * Vérifier si le code contient des définitions importantes
-     */
-    private function isDefinitionCode(string $code): bool
-    {
-        return preg_match('/^\s*(class|interface|trait|function|namespace|const|define)\s+/i', $code) === 1;
-    }
+        $this->executedCodeHistory[] = [
+            'code' => $trimmedCode,
+            'timestamp' => microtime(true),
+        ];
 
-    /**
-     * Déterminer le type de code
-     */
-    private function getCodeType(string $code): string
-    {
-        if (preg_match('/^\s*class\s+/i', $code)) return 'class';
-        if (preg_match('/^\s*interface\s+/i', $code)) return 'interface';
-        if (preg_match('/^\s*trait\s+/i', $code)) return 'trait';
-        if (preg_match('/^\s*function\s+/i', $code)) return 'function';
-        if (preg_match('/^\s*namespace\s+/i', $code)) return 'namespace';
-        if (preg_match('/^\s*(const|define)\s+/i', $code)) return 'constant';
-        return 'other';
+        // Limiter l'historique à 100 entrées pour éviter une consommation excessive de mémoire
+        if (count($this->executedCodeHistory) > 100) {
+            array_shift($this->executedCodeHistory);
+        }
     }
 
     /**
@@ -1876,6 +1862,6 @@ class Shell extends Application
             $codeBlocks[] = $entry['code'];
         }
 
-        return implode("\n\n", $codeBlocks);
+        return implode("\n", $codeBlocks);
     }
 }
