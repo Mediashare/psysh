@@ -12,6 +12,9 @@
 namespace Psy\Test\Command\Integration;
 
 use Psy\Command\ProfileCommand;
+use Psy\Profiling\XhprofEngine;
+use Psy\Profiling\XdebugInProcessEngine;
+use Psy\Profiling\XdebugSubprocessEngine;
 use Psy\Shell;
 use Psy\Test\TestCase;
 use Symfony\Component\Console\Tester\CommandTester;
@@ -45,8 +48,12 @@ class ProfileCommandTest extends TestCase
 
     private function requiresXdebugOrXhprof(): void
     {
-        if (!\extension_loaded('xdebug') && !\extension_loaded('xhprof')) {
-            $this->markTestSkipped('Either Xdebug or XHProf extension is required.');
+        if (
+            !XhprofEngine::isAvailable() &&
+            !XdebugInProcessEngine::isAvailable() &&
+            !XdebugSubprocessEngine::isAvailable()
+        ) {
+            $this->markTestSkipped('No suitable profiling engine is available.');
         }
     }
 
@@ -155,7 +162,7 @@ class ProfileCommandTest extends TestCase
         $tester = new CommandTester($this->command);
         $tester->execute([
             'code' => 'strlen("test")',
-            '--full' => true,
+            '--filter' => 'all',
         ]);
 
         $output = $tester->getDisplay();
@@ -243,14 +250,14 @@ class ProfileCommandTest extends TestCase
      */
     public function testTraceAllOption(): void
     {
-        if (!\extension_loaded('xdebug')) {
-            $this->markTestSkipped('Xdebug extension is required for --trace-all option.');
+        if (!XdebugSubprocessEngine::isAvailable()) {
+            $this->markTestSkipped('Xdebug subprocess engine is not available.');
         }
 
         $tester = new CommandTester($this->command);
         $tester->execute([
             'code' => 'strlen("test")',
-            '--trace-all' => true,
+            '--engine' => 'xdebug-subprocess',
         ]);
 
         $output = $tester->getDisplay();
@@ -328,7 +335,7 @@ class ProfileCommandTest extends TestCase
         $output = $tester->getDisplay();
 
         // Should show debug information
-        $this->assertStringContainsString('Debug:', $output);
+        $this->assertStringContainsString('DEBUG MODE ENABLED', $output);
         $this->assertStringContainsString('filterLevel=', $output);
         $this->assertStringContainsString('Total execution', $output);
 
@@ -438,7 +445,7 @@ class ProfileCommandTest extends TestCase
         $tester = new CommandTester($this->command);
         $tester->execute([
             'code' => 'for ($i = 0; $i < 10; $i++) { strlen("combined test"); }',
-            '--full' => true,
+            '--filter' => 'all',
             '--threshold' => 0,
             '--show-params' => true,
             '--out' => $tempFile,
@@ -571,7 +578,7 @@ class ProfileCommandTest extends TestCase
         $tester = new CommandTester($this->command);
         $tester->execute([
             'code' => 'strlen("test")',
-            '--full' => true,
+            '--filter' => 'all',
             '--threshold' => 0,
             '--show-params' => true,
             '--full-namespaces' => true,

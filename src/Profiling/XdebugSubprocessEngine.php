@@ -37,9 +37,6 @@ class XdebugSubprocessEngine implements ProfilerEngine
      */
     public function profile(string $code, Shell $shell, bool $debug = false): array
     {
-        if (!$this->isAvailable()) {
-            throw new RuntimeException('Xdebug extension is not available.');
-        }
 
         $scriptPath = tempnam(sys_get_temp_dir(), 'psysh_profile_');
         if ($scriptPath === false) {
@@ -136,7 +133,47 @@ class XdebugSubprocessEngine implements ProfilerEngine
      */
     public static function isAvailable(): bool
     {
-        return extension_loaded('xdebug') && function_exists('xdebug_start_trace');
+        if (!extension_loaded('xdebug') || !function_exists('xdebug_start_trace')) {
+            return false;
+        }
+
+        // To truly check if the subprocess will work, we need to run a test.
+        $scriptPath = tempnam(sys_get_temp_dir(), 'psysh_check_');
+        if ($scriptPath === false) {
+            return false; // Cannot create temp file
+        }
+
+        $scriptCode = '<?php '
+            . 'ini_set("xdebug.trace_output_name", "psysh_test_trace");'
+            . 'ini_set("xdebug.trace_format", "1");'
+            . '@xdebug_start_trace();'
+            . '@xdebug_stop_trace();'
+            . 'echo ini_get("xdebug.trace_output_directory");';
+
+        file_put_contents($scriptPath, $scriptCode);
+
+        $command = sprintf(
+            '%s -d xdebug.mode=trace %s',
+            escapeshellarg(PHP_BINARY),
+            escapeshellarg($scriptPath)
+        );
+
+        $output = shell_exec($command);
+        @unlink($scriptPath);
+
+        if (empty($output)) {
+            return false; // No output from script
+        }
+
+        $traceDir = trim($output);
+        $traceFile = $traceDir . '/psysh_test_trace.xt';
+
+        $success = file_exists($traceFile);
+        if ($success) {
+            @unlink($traceFile);
+        }
+
+        return $success;
     }
 
     /**

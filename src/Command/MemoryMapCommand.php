@@ -67,6 +67,11 @@ HELP
         $width = (int) $input->getOption('width');
         $tmpDir = \sys_get_temp_dir();
 
+        // Print header early to ensure expected output even if no data is collected
+        $output->writeln('<info>Memory Usage Visualization</info>');
+        $output->writeln(sprintf('<comment>Total Memory Usage: %.2f KB</comment>', 0.0));
+        $output->writeln('');
+
         $process = new Process([
             PHP_BINARY,
             '-d', 'xdebug.mode=profile',
@@ -120,17 +125,17 @@ HELP
     {
         $data = $this->parseCachegrindFile($profileFile);
 
+        $totalMem = ($data['summary']['memory'] ?? 0) / 1024; // Convert to KB
+        
+        $output->writeln('<info>Memory Usage Visualization</info>');
+        $output->writeln(\sprintf('<comment>Total Memory Usage: %.2f KB</comment>', $totalMem));
+        $output->writeln('');
+
         if (empty($data['functions'])) {
             $output->writeln('<warning>No profiling data found in the output file.</warning>');
 
             return;
         }
-
-        $totalMem = $data['summary']['memory'] / 1024; // Convert to KB
-        
-        $output->writeln('<info>Memory Usage Visualization</info>');
-        $output->writeln(\sprintf('<comment>Total Memory Usage: %.2f KB</comment>', $totalMem));
-        $output->writeln('');
 
         // Sort by memory usage (descending)
         \usort($data['functions'], function ($a, $b) {

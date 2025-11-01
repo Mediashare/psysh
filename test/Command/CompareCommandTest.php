@@ -13,22 +13,20 @@ namespace Psy\Test\Command;
 
 use Psy\Command\CompareCommand;
 use Psy\Command\ProfileCommand;
+use Psy\Profiling\XhprofEngine;
+use Psy\Profiling\XdebugInProcessEngine;
+use Psy\Profiling\XdebugSubprocessEngine;
 use Psy\Shell;
 use Psy\Test\TestCase;
 use Symfony\Component\Console\Tester\CommandTester;
 
-/**
- * @group Xdebug
- */
 class CompareCommandTest extends TestCase
 {
     private $tester;
 
     protected function setUp(): void
     {
-        if (!\extension_loaded('xdebug')) {
-            $this->markTestSkipped('Xdebug extension is not available');
-        }
+        $this->requiresXdebugOrXhprof();
 
         $shell = new \Psy\Shell();
         $shell->add(new ProfileCommand()); // CompareCommand depends on ProfileCommand
@@ -36,6 +34,17 @@ class CompareCommandTest extends TestCase
 
         $command = $shell->find('compare');
         $this->tester = new CommandTester($command);
+    }
+
+    private function requiresXdebugOrXhprof(): void
+    {
+        if (
+            !XhprofEngine::isAvailable() &&
+            !XdebugInProcessEngine::isAvailable() &&
+            !XdebugSubprocessEngine::isAvailable()
+        ) {
+            $this->markTestSkipped('No suitable profiling engine is available.');
+        }
     }
 
     public function testCompareCommand()

@@ -12,29 +12,37 @@
 namespace Psy\Test\Command;
 
 use Psy\Command\HotspotsCommand;
+use Psy\Profiling\XhprofEngine;
+use Psy\Profiling\XdebugInProcessEngine;
+use Psy\Profiling\XdebugSubprocessEngine;
 use Psy\Shell;
 use Psy\Test\TestCase;
 use Symfony\Component\Console\Tester\CommandTester;
 
-/**
- * @group Xdebug
- */
 class HotspotsCommandTest extends TestCase
 {
     private $command;
 
     protected function setUp(): void
     {
+        $this->requiresXdebugOrXhprof();
         $this->command = new HotspotsCommand();
         $this->command->setApplication(new Shell());
     }
 
+    private function requiresXdebugOrXhprof(): void
+    {
+        if (
+            !XhprofEngine::isAvailable() &&
+            !XdebugInProcessEngine::isAvailable() &&
+            !XdebugSubprocessEngine::isAvailable()
+        ) {
+            $this->markTestSkipped('No suitable profiling engine is available.');
+        }
+    }
+
     public function testHotspotsCommand()
     {
-        if (!\extension_loaded('xdebug')) {
-            $this->markTestSkipped('Xdebug extension is not loaded.');
-        }
-
         $tester = new CommandTester($this->command);
         $tester->execute([
             'code' => 'echo "hello";',
@@ -55,10 +63,6 @@ class HotspotsCommandTest extends TestCase
 
     public function testHotspotsCommandWithLimit()
     {
-        if (!\extension_loaded('xdebug')) {
-            $this->markTestSkipped('Xdebug extension is not loaded.');
-        }
-
         $tester = new CommandTester($this->command);
         $tester->execute([
             'code' => 'for($i=0;$i<100;$i++) { md5("test".$i); }',
@@ -72,10 +76,6 @@ class HotspotsCommandTest extends TestCase
 
     public function testHotspotsCommandWithOutFile()
     {
-        if (!\extension_loaded('xdebug')) {
-            $this->markTestSkipped('Xdebug extension is not loaded.');
-        }
-
         $tester = new CommandTester($this->command);
         $outFile = \tempnam(\sys_get_temp_dir(), 'hotspots');
         $tester->execute([

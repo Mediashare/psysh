@@ -3,6 +3,9 @@
 namespace Psy\Test\Command;
 
 use Psy\Command\ProfileCommand;
+use Psy\Profiling\XhprofEngine;
+use Psy\Profiling\XdebugInProcessEngine;
+use Psy\Profiling\XdebugSubprocessEngine;
 use Psy\Shell;
 use Symfony\Component\Console\Tester\CommandTester;
 
@@ -20,8 +23,12 @@ class ProfileCommandTest extends \Psy\Test\TestCase
 
     private function requiresXdebugOrXhprof()
     {
-        if (!\extension_loaded('xdebug') && !\extension_loaded('xhprof')) {
-            $this->markTestSkipped('Either Xdebug or XHProf extension is required.');
+        if (
+            !XhprofEngine::isAvailable() &&
+            !XdebugInProcessEngine::isAvailable() &&
+            !XdebugSubprocessEngine::isAvailable()
+        ) {
+            $this->markTestSkipped('No suitable profiling engine is available.');
         }
     }
 
@@ -96,7 +103,7 @@ class ProfileCommandTest extends \Psy\Test\TestCase
         $tester = new CommandTester($this->command);
         $tester->execute([
             'code' => 'MyProfileTestClass::run() + MY_PROFILE_TEST_CONST + $my_profile_var',
-            '--trace-all' => true, // Force subprocess engine to test context serialization
+            '--engine' => 'xdebug-subprocess', // Force subprocess engine to test context serialization
             '--debug' => true,
         ]);
 

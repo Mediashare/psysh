@@ -150,36 +150,102 @@ class XdebugInProcessEngine implements ProfilerEngine
                 continue;
             }
 
-            // Parse based on detected file format
-            if ($fileFormat === 4) {
-                // Xdebug 3 format: level func_num type time memory function is_user filename lineno params...
-                $parts = preg_split('/\t+/', $t);
-                if (count($parts) < 3) {
-                    continue;
+            // Try human-readable format first (time memory INDENT-> function or time memory INDENT<-)
+            if (preg_match('/^(\d+\.\d+)\s+(\d+)(\s+)(->|<-)\s*(.*)$/', $t, $m)) {
+                $time = (float) $m[1] * 1000000;
+                $memory = (int) $m[2];
+                $indent = $m[3];
+                $op = $m[4];
+                $fnPart = trim($m[5]);
+
+                // Calculate level by indentation (spaces before ->)
+                $level = (int) (strlen($indent) / 2); // Assuming 2 spaces per level
+
+                if ($op === '->') {
+                    // Function entry - Clean up function name
+                    $fn = preg_replace('/\s+\/.*$/', '', $fnPart); // Remove file path
+                    $fn = preg_replace('/\(\)\s*$/', '', $fn); // Remove () at end
+
+                    $callStack[$level] = [
+                        'name' => $fn,
+                        'start_time' => $time,
+                        'start_memory' => $memory,
+                        'peak_memory' => $memory,
+                    ];
+
+                    // Initialize function entry if it doesn't exist yet
+                    if (!isset($functions[$fn])) {
+                        $functions[$fn] = [
+                            'calls' => 0,
+                            'time' => 0,
+                            'exclusive_time' => 0,
+                            'memory' => 0,
+                            'peak_memory' => $memory,
+                            'cpu_time' => 0,
+                            'is_user' => $this->isUserFunction($fn),
+                            'params' => null,
+                        ];
+                    }
+                    // Track peak memory for all active functions in call stack
+                    foreach ($callStack as $stackLevel => &$stackEntry) {
+                        $stackEntry['peak_memory'] = max($stackEntry['peak_memory'], $memory);
+                        if (isset($functions[$stackEntry['name']])) {
+                            $functions[$stackEntry['name']]['peak_memory'] = max($functions[$stackEntry['name']]['peak_memory'], $memory);
+                        }
+                    }
+                } elseif ($op === '<-') {
+                    // Function exit - Find matching entry in call stack
+                    // Note: $fnPart might be a return value (like "11") or empty
+                    if (isset($callStack[$level])) {
+                        $call = $callStack[$level];
+                        $duration = max(0, $time - $call['start_time']);
+                        $memoryDelta = $memory - $call['start_memory'];
+
+                        // Update peak memory for all active functions
+                        foreach ($callStack as $stackLevel => &$stackEntry) {
+                            $stackEntry['peak_memory'] = max($stackEntry['peak_memory'], $memory);
+                            if (isset($functions[$stackEntry['name']])) {
+                                $functions[$stackEntry['name']]['peak_memory'] = max($functions[$stackEntry['name']]['peak_memory'], $memory);
+                            }
+                        }
+
+                        $functions[$call['name']]['calls']++;
+                        $functions[$call['name']]['time'] += $duration;
+                        $functions[$call['name']]['exclusive_time'] += $duration;
+                        $functions[$call['name']]['memory'] += $memoryDelta;
+                        $functions[$call['name']]['cpu_time'] += $duration;
+
+                        unset($callStack[$level]);
+                    }
                 }
-                
-                $level = (int) $parts[0];
-                $funcNum = (int) $parts[1];
-                $type = (int) $parts[2];
-                
-                if ($type === 0 && count($parts) >= 6) {
+            }
+            // Fallback: Try tab-separated format (Xdebug 3 computerized format)
+            elseif (preg_match('/^(\d+)\t+(\d+)\t+(\d+)\t+(.*)$/', $t, $m)) {
+                $level = (int) $m[1];
+                $funcNum = (int) $m[2];
+                $type = (int) $m[3];
+                $rest = $m[4];
+
+                $parts = preg_split('/\t+/', $rest);
+
+                if ($type === 0 && count($parts) >= 3) {
                     // Function entry
-                    $time = (float) $parts[3] * 1000000;
-                    $memory = (int) $parts[4];
-                    $fn = $parts[5];
-                    
+                    $time = (float) $parts[0] * 1000000;
+                    $memory = (int) $parts[1];
+                    $fn = $parts[2];
+
                     $callStack[$funcNum] = [
                         'name' => $fn,
                         'start_time' => $time,
                         'start_memory' => $memory,
                         'level' => $level,
                     ];
-                } elseif ($type === 1 && count($parts) >= 4) {
+                } elseif ($type === 1 && count($parts) >= 2) {
                     // Function exit
                     if (isset($callStack[$funcNum])) {
                         $call = $callStack[$funcNum];
-                        $time = (float) $parts[3] * 1000000;
-                        $memory = (int) $parts[4];
+                        $time = (float) $parts[0] * 1000000;
+                        $memory = (int) $parts[1];
                         $duration = max(0, $time - $call['start_time']);
                         $memoryDelta = $memory - $call['start_memory'];
 
@@ -189,7 +255,7 @@ class XdebugInProcessEngine implements ProfilerEngine
                                 'time' => 0,
                                 'exclusive_time' => 0,
                                 'memory' => 0,
-                                'peak_memory' => 0,
+                                'peak_memory' => $memory,
                                 'cpu_time' => 0,
                                 'is_user' => $this->isUserFunction($call['name']),
                                 'params' => null,
@@ -201,73 +267,19 @@ class XdebugInProcessEngine implements ProfilerEngine
                         $functions[$call['name']]['exclusive_time'] += $duration;
                         $functions[$call['name']]['memory'] += $memoryDelta;
                         $functions[$call['name']]['cpu_time'] += $duration;
+                        $functions[$call['name']]['peak_memory'] = max($functions[$call['name']]['peak_memory'], $memory);
 
                         unset($callStack[$funcNum]);
-                    }
-                }
-            } else {
-                // Legacy format (format 1): Match Xdebug computerized trace format
-                if (preg_match('/^\s*(\d+)\s+(\d+\.\d+)\s+(\d+)\s+(->|<-)\s+(.+?)(?:\s+\(.+\))?(?:\s+.*)?$/', $t, $m)) {
-                    $level = (int) $m[1];
-                    $time = (float) $m[2] * 1000000;
-                    $memory = (int) $m[3];
-                    $op = $m[4];
-                    $fn = $m[5];
-
-                    if ($op === '->') {
-                        // Function entry
-                        $callStack[$level] = [
-                            'name' => $fn,
-                            'start_time' => $time,
-                            'start_memory' => $memory,
-                        ];
-                    } elseif ($op === '<-') {
-                        // Function exit
-                        if (isset($callStack[$level])) {
-                            $call = $callStack[$level];
-                            $duration = max(0, $time - $call['start_time']);
-                            $memoryDelta = $memory - $call['start_memory'];
-
-                            if (!isset($functions[$call['name']])) {
-                                $functions[$call['name']] = [
-                                    'calls' => 0,
-                                    'time' => 0,
-                                    'exclusive_time' => 0,
-                                    'memory' => 0,
-                                    'peak_memory' => 0,
-                                    'cpu_time' => 0,
-                                    'is_user' => $this->isUserFunction($call['name']),
-                                    'params' => null,
-                                ];
-                            }
-
-                            $functions[$call['name']]['calls']++;
-                            $functions[$call['name']]['time'] += $duration;
-                            $functions[$call['name']]['exclusive_time'] += $duration;
-                            $functions[$call['name']]['memory'] += $memoryDelta;
-                            $functions[$call['name']]['cpu_time'] += $duration;
-
-                            unset($callStack[$level]);
-                        }
                     }
                 }
             }
         }
 
-        return $this->addPercentages($functions);
-    }
-
-    /**
-     * Add time_percent and memory_percent to each function.
-     */
-    private function addPercentages(array $functions): array
-    {
-        $totalTime = array_sum(array_column($functions, 'time'));
-        $totalMemory = array_sum(array_column($functions, 'memory'));
-
-        foreach ($functions as $name => &$data) {
-            $data['time_percent'] = $totalTime > 0 ? ($data['time'] / $totalTime) * 100 : 0;
-            $data['memory_percent'] = $totalMemory > 0 ? ($data['memory'] / $totalMemory) * 100 : 0;
+        // Convert float time values to integers and ensure cpu_time matches time
+        foreach ($functions as &$func) {
+            $func['time'] = (int) $func['time'];
+            $func['exclusive_time'] = (int) $func['exclusive_time'];
+            $func['cpu_time'] = 0; // Not tracked in human-readable format
         }
 
         return $functions;

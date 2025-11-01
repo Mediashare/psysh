@@ -21,6 +21,24 @@ class ContextBuilder
             $contextLines[] = $userCode;
         }
 
+        // Also capture code from the current buffer
+        if (method_exists($shell, 'getCodeBuffer')) {
+            $codeBuffer = $shell->getCodeBuffer();
+            if (!empty($codeBuffer)) {
+                $bufferCode = implode(PHP_EOL, array_map(function($line) {
+                    // Handle SilentInput objects
+                    if (is_object($line) && method_exists($line, '__toString')) {
+                        return (string) $line;
+                    }
+                    return (string) $line;
+                }, $codeBuffer));
+
+                if (!empty(trim($bufferCode))) {
+                    $contextLines[] = $bufferCode;
+                }
+            }
+        }
+
         // Capture scope variables
         self::captureScopeVariables($shell, $contextLines);
 
@@ -33,8 +51,7 @@ class ContextBuilder
     /**
      * Capture scope variables from the shell.
      *
-     * Note: Objects are NOT serialized here because they should already be
-     * created by the executed code. We only serialize scalar values.
+     * Note: Objects are serialized using opis/closure to preserve their state.
      */
     private static function captureScopeVariables(Shell $shell, array &$context): void
     {
@@ -49,14 +66,15 @@ class ContextBuilder
                 continue;
             }
 
-            // Only serialize scalar types and arrays (NOT objects)
-            // Objects should be recreated from the executed code
-            if (self::isSerializable($value)) {
-                try {
-                    $context[] = sprintf('$%s = %s;', $name, var_export($value, true));
-                } catch (\Exception $e) {
-                    $context[] = sprintf("// Variable \$%s could not be serialized: %s", $name, $e->getMessage());
-                }
+            try {
+                // Serialize the value using Opis\Closure
+                $serialized = \Opis\Closure\serialize($value);
+                // Base64 encode to prevent issues with special characters
+                $encoded = base64_encode($serialized);
+                // Add the unserialization code to the context
+                $context[] = sprintf('$%s = \Opis\Closure\unserialize(base64_decode(%s));', $name, var_export($encoded, true));
+            } catch (\Exception $e) {
+                $context[] = sprintf("// Variable \$%s could not be serialized: %s", $name, $e->getMessage());
             }
         }
     }
@@ -106,20 +124,8 @@ class ContextBuilder
 
     private static function isSerializable($value): bool
     {
-        if (is_scalar($value) || is_null($value)) {
-            return true;
-        }
-
-        if (is_array($value)) {
-            foreach ($value as $item) {
-                if (!self::isSerializable($item)) {
-                    return false;
-                }
-            }
-            return true;
-        }
-
-        return false;
+        return is_scalar($value) || is_null($value) || is_array($value);
     }
+
 
 }

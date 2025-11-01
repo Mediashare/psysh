@@ -14,6 +14,9 @@ namespace Psy\Test\Command\Integration;
 use Psy\Command\ProfileCommand;
 use Psy\Command\HotspotsCommand;
 use Psy\Command\MemoryMapCommand;
+use Psy\Profiling\XhprofEngine;
+use Psy\Profiling\XdebugInProcessEngine;
+use Psy\Profiling\XdebugSubprocessEngine;
 use Psy\Shell;
 use Psy\Test\TestCase;
 use Symfony\Component\Console\Tester\CommandTester;
@@ -44,8 +47,12 @@ class ProfilingWorkflowTest extends TestCase
 
     private function requiresXdebugOrXhprof()
     {
-        if (!\extension_loaded('xdebug') && !\extension_loaded('xhprof')) {
-            $this->markTestSkipped('Either Xdebug or XHProf extension is required.');
+        if (
+            !XhprofEngine::isAvailable() &&
+            !XdebugInProcessEngine::isAvailable() &&
+            !XdebugSubprocessEngine::isAvailable()
+        ) {
+            $this->markTestSkipped('No suitable profiling engine is available.');
         }
     }
 

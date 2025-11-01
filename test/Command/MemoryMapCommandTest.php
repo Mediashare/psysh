@@ -12,29 +12,37 @@
 namespace Psy\Test\Command;
 
 use Psy\Command\MemoryMapCommand;
+use Psy\Profiling\XhprofEngine;
+use Psy\Profiling\XdebugInProcessEngine;
+use Psy\Profiling\XdebugSubprocessEngine;
 use Psy\Shell;
 use Psy\Test\TestCase;
 use Symfony\Component\Console\Tester\CommandTester;
 
-/**
- * @group Xdebug
- */
 class MemoryMapCommandTest extends TestCase
 {
     private $command;
 
     protected function setUp(): void
     {
+        $this->requiresXdebugOrXhprof();
         $this->command = new MemoryMapCommand();
         $this->command->setApplication(new Shell());
     }
 
+    private function requiresXdebugOrXhprof(): void
+    {
+        if (
+            !XhprofEngine::isAvailable() &&
+            !XdebugInProcessEngine::isAvailable() &&
+            !XdebugSubprocessEngine::isAvailable()
+        ) {
+            $this->markTestSkipped('No suitable profiling engine is available.');
+        }
+    }
+
     public function testMemoryMapCommand()
     {
-        if (!\extension_loaded('xdebug')) {
-            $this->markTestSkipped('Xdebug extension is not loaded.');
-        }
-
         $tester = new CommandTester($this->command);
         $tester->execute([
             'code' => 'str_repeat("x", 1000);',
@@ -55,10 +63,6 @@ class MemoryMapCommandTest extends TestCase
 
     public function testMemoryMapCommandWithWidth()
     {
-        if (!\extension_loaded('xdebug')) {
-            $this->markTestSkipped('Xdebug extension is not loaded.');
-        }
-
         $tester = new CommandTester($this->command);
         $tester->execute([
             'code' => 'array_fill(0, 100, "test");',
@@ -72,10 +76,6 @@ class MemoryMapCommandTest extends TestCase
 
     public function testMemoryMapCommandWithOutFile()
     {
-        if (!\extension_loaded('xdebug')) {
-            $this->markTestSkipped('Xdebug extension is not loaded.');
-        }
-
         $tester = new CommandTester($this->command);
         $outFile = \tempnam(\sys_get_temp_dir(), 'memorymap');
         $tester->execute([
@@ -107,10 +107,6 @@ class MemoryMapCommandTest extends TestCase
 
     public function testMemoryMapCommandWithComplexCode()
     {
-        if (!\extension_loaded('xdebug')) {
-            $this->markTestSkipped('Xdebug extension is not loaded.');
-        }
-
         $tester = new CommandTester($this->command);
         $tester->execute([
             'code' => 'for($i=0;$i<10;$i++) { $data[] = str_repeat("x", 100); }',

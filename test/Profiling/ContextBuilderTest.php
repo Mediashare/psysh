@@ -28,8 +28,8 @@ class ContextBuilderTest extends TestCase
 
         // Assertions
         $this->assertStringContainsString('require_once', $script);
-        $this->assertStringContainsString('$my_var = \'hello\';', $script);
-        $this->assertStringContainsString('$my_array = [1, 2, 3];', $script);
+        $this->assertStringContainsString('$my_var = \\Opis\\Closure\\unserialize(base64_decode(', $script);
+        $this->assertStringContainsString('$my_array = \\Opis\\Closure\\unserialize(base64_decode(', $script);
         $this->assertStringContainsString('unserialize', $script);
         $this->assertStringContainsString('if (!defined(\'MY_CONSTANT\')) define(\'MY_CONSTANT\', \'my_value\');', $script);
         $this->assertStringContainsString('class MyClass', $script);
