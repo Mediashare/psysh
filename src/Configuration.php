@@ -66,6 +66,7 @@ class Configuration
         'rawOutput',
         'requireSemicolons',
         'runtimeDir',
+        'showMetrics',
         'startupMessage',
         'strictTypes',
         'theme',
@@ -101,6 +102,7 @@ class Configuration
     private bool $rawOutput = false;
     private bool $requireSemicolons = false;
     private bool $strictTypes = false;
+    private bool $showMetrics = true;
     private ?bool $useUnicode = null;
     private ?bool $useTabCompletion = null;
     private array $newMatchers = [];
@@ -989,6 +991,22 @@ class Configuration
     public function strictTypes(): bool
     {
         return $this->strictTypes;
+    }
+
+    /**
+     * Enable or disable metrics display.
+     */
+    public function setShowMetrics(bool $showMetrics)
+    {
+        $this->showMetrics = $showMetrics;
+    }
+
+    /**
+     * Check whether to show metrics display.
+     */
+    public function showMetrics(): bool
+    {
+        return $this->showMetrics;
     }
 
     /**
