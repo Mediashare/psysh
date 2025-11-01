@@ -22,6 +22,8 @@ use Psy\ExecutionLoop\RunkitReloader;
 use Psy\Formatter\TraceFormatter;
 use Psy\Input\ShellInput;
 use Psy\Input\SilentInput;
+use Psy\Metrics\MetricsCollector;
+use Psy\Metrics\MetricsDisplay;
 use Psy\Output\ShellOutput;
 use Psy\Readline\Readline;
 use Psy\TabCompletion\AutoCompleter;
@@ -80,6 +82,8 @@ class Shell extends Application
     /** @var array Historique du code exécuté dans le shell */
     private array $executedCodeHistory = [];
     private $codeExecutionWrapper = null;
+    private ?MetricsCollector $metricsCollector = null;
+    private ?MetricsDisplay $metricsDisplay = null;
 
     public function setCodeExecutionWrapper(?callable $wrapper): void
     {
@@ -103,6 +107,10 @@ class Shell extends Application
         $this->stdoutBuffer = '';
         $this->loopListeners = $this->getDefaultLoopListeners();
 
+        // Initialize metrics system
+        $this->metricsCollector = new MetricsCollector();
+        $this->metricsDisplay = new MetricsDisplay($this->metricsCollector);
+
         $this->output = $this->config->getOutput();
         $this->originalVerbosity = $this->output->getVerbosity();
 
@@ -117,6 +125,22 @@ class Shell extends Application
     public function getConfig(): Configuration
     {
         return $this->config;
+    }
+
+    /**
+     * Get the metrics display instance.
+     */
+    public function getMetricsDisplay(): ?MetricsDisplay
+    {
+        return $this->metricsDisplay;
+    }
+
+    /**
+     * Get the metrics collector instance.
+     */
+    public function getMetricsCollector(): ?MetricsCollector
+    {
+        return $this->metricsCollector;
     }
 
     /**
@@ -636,6 +660,11 @@ class Shell extends Application
     {
         $this->errorReporting = \error_reporting();
 
+        // Start metrics collection
+        if ($this->metricsCollector) {
+            $this->metricsCollector->startCommand();
+        }
+
         foreach ($this->loopListeners as $listener) {
             if (($return = $listener->onExecute($this, $code)) !== null) {
                 $code = $return;
@@ -657,8 +686,18 @@ class Shell extends Application
      */
     public function afterLoop()
     {
+        // End metrics collection
+        if ($this->metricsCollector) {
+            $this->metricsCollector->endCommand();
+        }
+
         foreach ($this->loopListeners as $listener) {
             $listener->afterLoop($this);
+        }
+
+        // Display metrics after all listeners have run
+        if ($this->metricsDisplay && !$this->nonInteractive) {
+            $this->metricsDisplay->display($this->output, $this->context);
         }
     }
 
