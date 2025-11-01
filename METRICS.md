@@ -10,6 +10,7 @@ The Metrics Display feature provides real-time feedback about command execution 
 
 The metrics display shows:
 
+- **CWD**: Current working directory (compact format with ~ for home, truncated for long paths)
 - **Time**: Execution time for each command
   - Automatically formatted in μs (microseconds), ms (milliseconds), or s (seconds)
 - **Memory**: Current memory usage
@@ -24,12 +25,12 @@ The metrics display shows:
 >>> $greeting = "Hello, PsySH!";
 = "Hello, PsySH!"
 
-┌─ Time: 3.76ms │ Memory: 10.00MB │ Vars: 3 │ Cmds: 1 ─┘
+┌─ CWD: ~/work/psysh/psysh │ Time: 3.76ms │ Memory: 10.00MB │ Vars: 3 │ Cmds: 1 ─┘
 
 >>> $numbers = range(1, 100);
 = [1, 2, 3, ..., 100]
 
-┌─ Time: 2.31ms │ Memory: 12.00MB │ Vars: 4 │ Cmds: 2 ─┘
+┌─ CWD: ~/work/psysh/psysh │ Time: 2.31ms │ Memory: 12.00MB │ Vars: 4 │ Cmds: 2 ─┘
 ```
 
 ## Configuration

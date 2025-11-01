@@ -90,6 +90,12 @@ class MetricsDisplay
     {
         $metrics = [];
 
+        // Current working directory (compact format)
+        $cwd = $this->formatCwd(getcwd());
+        if ($cwd) {
+            $metrics['cwd'] = $cwd;
+        }
+
         // Execution time
         $execTime = $this->collector->getLastExecutionTime();
         if ($execTime > 0) {
@@ -159,6 +165,38 @@ class MetricsDisplay
     }
 
     /**
+     * Format current working directory in compact form.
+     *
+     * @param string|false $cwd
+     *
+     * @return string
+     */
+    private function formatCwd($cwd): string
+    {
+        if ($cwd === false) {
+            return '';
+        }
+
+        // Replace home directory with ~
+        $home = getenv('HOME');
+        if ($home && strpos($cwd, $home) === 0) {
+            $cwd = '~' . substr($cwd, strlen($home));
+        }
+
+        // Truncate long paths - show first and last parts
+        $maxLength = 30;
+        if (strlen($cwd) > $maxLength) {
+            $parts = explode('/', $cwd);
+            if (count($parts) > 3) {
+                // Keep first part (~ or /) and last 2 parts
+                $cwd = $parts[0] . '/.../' . $parts[count($parts) - 2] . '/' . $parts[count($parts) - 1];
+            }
+        }
+
+        return $cwd;
+    }
+
+    /**
      * Format metrics into a display string.
      *
      * @param array $metrics
@@ -192,6 +230,7 @@ class MetricsDisplay
     private function getMetricLabel(string $key): string
     {
         $labels = [
+            'cwd' => 'CWD',
             'time' => 'Time',
             'memory' => 'Memory',
             'peak' => 'Peak',

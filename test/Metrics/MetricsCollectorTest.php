@@ -116,4 +116,26 @@ class MetricsCollectorTest extends TestCase
         // Command count should NOT increment since startCommand wasn't called
         $this->assertEquals(0, $collector->getCommandCount());
     }
+
+    public function testGetCurrentElapsedTime()
+    {
+        $collector = new MetricsCollector();
+        
+        $this->assertEquals(0.0, $collector->getCurrentElapsedTime());
+        $this->assertFalse($collector->isExecuting());
+        
+        $collector->startCommand();
+        
+        $this->assertTrue($collector->isExecuting());
+        usleep(10000); // 10ms
+        
+        $elapsed = $collector->getCurrentElapsedTime();
+        $this->assertGreaterThan(0.0, $elapsed);
+        $this->assertGreaterThanOrEqual(0.01, $elapsed);
+        
+        $collector->endCommand();
+        
+        $this->assertFalse($collector->isExecuting());
+        $this->assertEquals(0.0, $collector->getCurrentElapsedTime());
+    }
 }

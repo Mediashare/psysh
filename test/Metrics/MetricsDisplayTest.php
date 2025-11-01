@@ -149,4 +149,23 @@ class MetricsDisplayTest extends TestCase
         $this->assertStringContainsString('─┘', $result);
         $this->assertStringContainsString('│', $result);
     }
+
+    public function testDisplayWithCwd()
+    {
+        $collector = new MetricsCollector();
+        $display = new MetricsDisplay($collector);
+        $output = new BufferedOutput();
+        $context = new Context();
+        
+        $collector->startCommand();
+        $collector->endCommand();
+        
+        $display->display($output, $context);
+        
+        $result = $output->fetch();
+        
+        // Should show CWD
+        $this->assertStringContainsString('CWD:', $result);
+    }
 }
+

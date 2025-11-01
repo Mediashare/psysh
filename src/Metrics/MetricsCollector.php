@@ -75,6 +75,25 @@ class MetricsCollector
     }
 
     /**
+     * Get the current elapsed time (while command is still running).
+     */
+    public function getCurrentElapsedTime(): float
+    {
+        if ($this->commandStartTime > 0) {
+            return microtime(true) - $this->commandStartTime;
+        }
+        return 0.0;
+    }
+
+    /**
+     * Check if a command is currently executing.
+     */
+    public function isExecuting(): bool
+    {
+        return $this->commandStartTime > 0;
+    }
+
+    /**
      * Get the total number of commands executed.
      */
     public function getCommandCount(): int
