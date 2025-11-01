@@ -110,6 +110,11 @@ class Shell extends Application
         // Initialize metrics system
         $this->metricsCollector = new MetricsCollector();
         $this->metricsDisplay = new MetricsDisplay($this->metricsCollector);
+        
+        // Respect the configuration setting for metrics display
+        if (!$this->config->showMetrics()) {
+            $this->metricsDisplay->disable();
+        }
 
         $this->output = $this->config->getOutput();
         $this->originalVerbosity = $this->output->getVerbosity();
