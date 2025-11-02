@@ -80,6 +80,9 @@ class Shell extends Application
     /** @var array Historique du code exécuté dans le shell */
     private array $executedCodeHistory = [];
     private $codeExecutionWrapper = null;
+    private ?\Psy\Async\AsyncMetricsManager $asyncMetricsManager = null;
+    private ?\Psy\Async\StatusBar $statusBar = null;
+    private ?\Psy\Async\AsyncExecutionWrapper $asyncExecutionWrapper = null;
 
     public function setCodeExecutionWrapper(?callable $wrapper): void
     {
@@ -110,6 +113,20 @@ class Shell extends Application
 
         $this->config->setShell($this);
 
+        // Initialize async components if enabled
+        if ($this->config->useAsyncMetrics()) {
+            $this->asyncMetricsManager = new \Psy\Async\AsyncMetricsManager();
+
+            if ($this->config->useStatusBar()) {
+                $this->statusBar = new \Psy\Async\StatusBar($this->output);
+            }
+
+            $this->asyncExecutionWrapper = new \Psy\Async\AsyncExecutionWrapper(
+                $this->asyncMetricsManager,
+                $this->statusBar
+            );
+        }
+
         // Register the current shell session's config with \Psy\info
         \Psy\info($this->config);
     }
@@ -117,6 +134,36 @@ class Shell extends Application
     public function getConfig(): Configuration
     {
         return $this->config;
+    }
+
+    /**
+     * Get the async execution wrapper.
+     *
+     * @return \Psy\Async\AsyncExecutionWrapper|null
+     */
+    public function getAsyncExecutionWrapper(): ?\Psy\Async\AsyncExecutionWrapper
+    {
+        return $this->asyncExecutionWrapper;
+    }
+
+    /**
+     * Get the async metrics manager.
+     *
+     * @return \Psy\Async\AsyncMetricsManager|null
+     */
+    public function getAsyncMetricsManager(): ?\Psy\Async\AsyncMetricsManager
+    {
+        return $this->asyncMetricsManager;
+    }
+
+    /**
+     * Get the status bar.
+     *
+     * @return \Psy\Async\StatusBar|null
+     */
+    public function getStatusBar(): ?\Psy\Async\StatusBar
+    {
+        return $this->statusBar;
     }
 
     /**
@@ -248,6 +295,7 @@ class Shell extends Application
             new Command\ExplainCommand(),
             new Command\StackCommand(),
             new Command\AutoloadCommand(),
+            new Command\AsyncCommand(),
             // new Command\PsyVersionCommand(),
             $sudo,
             $hist,

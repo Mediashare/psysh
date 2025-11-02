@@ -2,6 +2,16 @@
 
 PsySH is a runtime developer console, interactive debugger and [REPL](https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop) for PHP. Learn more at [psysh.org](http://psysh.org/) and [in the manual](https://github.com/bobthecow/psysh/wiki/Home).
 
+## ✨ New: Async Metrics & Real-Time Status Bar
+
+PsySH now supports **asynchronous metrics tracking** and a **real-time status bar** powered by AMPHP! 
+
+- 📊 Track execution time, memory usage, and more in real-time
+- 💫 Status bar displays live metrics during code execution
+- ⚡ Built on the robust AMPHP async framework
+
+👉 [Learn more about async features](ASYNC.md)
+
 
 [![Package version](https://img.shields.io/packagist/v/psy/psysh.svg?style=flat-square)](https://packagist.org/packages/psy/psysh)
 [![Monthly downloads](http://img.shields.io/packagist/dm/psy/psysh.svg?style=flat-square)](https://packagist.org/packages/psy/psysh)
@@ -34,5 +44,7 @@ PsySH is a runtime developer console, interactive debugger and [REPL](https://en
  * [📄 Sample config file](https://github.com/bobthecow/psysh/wiki/Sample-config)
 
 ### [🔌 Integrations](https://github.com/bobthecow/psysh/wiki/Integrations)
+
+### [⚡ Async Metrics & Status Bar](ASYNC.md)
 
 ### [PROFILING](PROFILING.md)

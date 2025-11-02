@@ -56,7 +56,15 @@ class ExecutionLoopClosure extends ExecutionClosure
                                 $__psysh__->runCommand($code);
                                 $_ = null; // Command output is handled by the command itself
                             } else {
-                                $_ = eval($code ?: ExecutionClosure::NOOP_INPUT);
+                                // Use async execution wrapper if available
+                                $asyncWrapper = $__psysh__->getAsyncExecutionWrapper();
+                                if ($asyncWrapper !== null && $asyncWrapper->isEnabled()) {
+                                    $_ = $asyncWrapper->execute(function () use ($code) {
+                                        return eval($code ?: ExecutionClosure::NOOP_INPUT);
+                                    });
+                                } else {
+                                    $_ = eval($code ?: ExecutionClosure::NOOP_INPUT);
+                                }
                             }
                         } else {
                             $_ = null;

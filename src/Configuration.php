@@ -78,6 +78,8 @@ class Configuration
         'verbosity',
         'warnOnMultipleConfigs',
         'yolo',
+        'useAsyncMetrics',
+        'useStatusBar',
     ];
 
     private ?array $defaultIncludes = null;
@@ -116,6 +118,8 @@ class Configuration
     private string $verbosity = self::VERBOSITY_NORMAL;
     private bool $yolo = false;
     private ?Theme $theme = null;
+    private bool $useAsyncMetrics = true;
+    private bool $useStatusBar = true;
 
     // services
     private ?Readline\Readline $readline = null;
@@ -1093,6 +1097,46 @@ class Configuration
     public function yolo(): bool
     {
         return $this->yolo;
+    }
+
+    /**
+     * Enable or disable async metrics tracking.
+     *
+     * @param bool $useAsyncMetrics
+     */
+    public function setUseAsyncMetrics(bool $useAsyncMetrics)
+    {
+        $this->useAsyncMetrics = (bool) $useAsyncMetrics;
+    }
+
+    /**
+     * Check whether to use async metrics tracking.
+     *
+     * @return bool
+     */
+    public function useAsyncMetrics(): bool
+    {
+        return $this->useAsyncMetrics;
+    }
+
+    /**
+     * Enable or disable the status bar.
+     *
+     * @param bool $useStatusBar
+     */
+    public function setUseStatusBar(bool $useStatusBar)
+    {
+        $this->useStatusBar = (bool) $useStatusBar;
+    }
+
+    /**
+     * Check whether to use the status bar.
+     *
+     * @return bool
+     */
+    public function useStatusBar(): bool
+    {
+        return $this->useStatusBar;
     }
 
     /**
