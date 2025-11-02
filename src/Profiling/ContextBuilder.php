@@ -73,7 +73,8 @@ class ContextBuilder
                 $encoded = base64_encode($serialized);
                 // Add the unserialization code to the context
                 $context[] = sprintf('$%s = \Opis\Closure\unserialize(base64_decode(%s));', $name, var_export($encoded, true));
-            } catch (\Exception $e) {
+            } catch (\Throwable $e) {
+                // Catch all errors (TypeError, Error, Exception) to avoid breaking the hotspots context build
                 $context[] = sprintf("// Variable \$%s could not be serialized: %s", $name, $e->getMessage());
             }
         }
