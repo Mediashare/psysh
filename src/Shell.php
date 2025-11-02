@@ -295,6 +295,7 @@ class Shell extends Application
             new Command\ExplainCommand(),
             new Command\StackCommand(),
             new Command\AutoloadCommand(),
+            new Command\AsyncCommand(),
             // new Command\PsyVersionCommand(),
             $sudo,
             $hist,
