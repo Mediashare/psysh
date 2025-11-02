@@ -73,20 +73,53 @@ class AsyncExecutionWrapper
 
         $result = null;
         $exception = null;
+        $finished = false;
 
-        try {
-            // Execute the code
-            $result = $callable();
-        } catch (\Throwable $e) {
-            $exception = $e;
-        } finally {
-            // Stop metrics tracking
-            $this->metricsManager->stop();
+        // Set up signal handler to allow periodic event loop processing
+        if (\function_exists('pcntl_signal') && \function_exists('pcntl_alarm')) {
+            // Use SIGALRM to periodically process event loop
+            $oldHandler = \pcntl_signal_get_handler(\SIGALRM);
+            \pcntl_signal(\SIGALRM, function () {
+                // Process pending event loop callbacks
+                EventLoop::getDriver()->tick(false);
+                // Schedule next alarm
+                \pcntl_alarm(1);
+            });
+            // Start with first alarm
+            \pcntl_alarm(1);
 
-            // Hide status bar
-            if ($this->statusBar !== null) {
-                $this->statusBar->hide();
+            try {
+                $result = $callable();
+            } catch (\Throwable $e) {
+                $exception = $e;
+            } finally {
+                // Cancel alarm and restore handler
+                \pcntl_alarm(0);
+                if ($oldHandler !== false) {
+                    \pcntl_signal(\SIGALRM, $oldHandler);
+                }
+                $finished = true;
             }
+        } else {
+            // Fallback: just execute without real-time updates
+            try {
+                $result = $callable();
+            } catch (\Throwable $e) {
+                $exception = $e;
+            } finally {
+                $finished = true;
+            }
+        }
+
+        // Process any remaining callbacks
+        EventLoop::getDriver()->tick(false);
+
+        // Stop metrics tracking
+        $this->metricsManager->stop();
+
+        // Hide status bar
+        if ($this->statusBar !== null) {
+            $this->statusBar->hide();
         }
 
         if ($exception !== null) {

@@ -118,8 +118,8 @@ class Configuration
     private string $verbosity = self::VERBOSITY_NORMAL;
     private bool $yolo = false;
     private ?Theme $theme = null;
-    private bool $useAsyncMetrics = false;
-    private bool $useStatusBar = false;
+    private bool $useAsyncMetrics = true;
+    private bool $useStatusBar = true;
 
     // services
     private ?Readline\Readline $readline = null;
