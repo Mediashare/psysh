@@ -3,7 +3,7 @@
 /*
  * This file is part of Psy Shell.
  *
- * (c) 2012-2023 Justin Hileman
+ * (c) 2012-2026 Justin Hileman
  *
  * For the full copyright and license information, please view the LICENSE
  * file that was distributed with this source code.
@@ -594,6 +594,24 @@ class ConfigurationTest extends TestCase
         $this->assertSame(Configuration::INTERACTIVE_MODE_DISABLED, $config->interactiveMode());
     }
 
+    /**
+     * @group isolation-fail
+     */
+    public function testConfigurationFromInputWarmAutoload()
+    {
+        // Test without --warm-autoload flag (default is no warmers)
+        $input = $this->getBoundStringInput('');
+        $config = Configuration::fromInput($input);
+        $this->assertCount(0, $config->getAutoloadWarmers());
+
+        // Test with --warm-autoload flag (should enable default warmer)
+        $input = $this->getBoundStringInput('--warm-autoload');
+        $config = Configuration::fromInput($input);
+        $warmers = $config->getAutoloadWarmers();
+        $this->assertCount(1, $warmers);
+        $this->assertInstanceOf('Psy\TabCompletion\AutoloadWarmer\ComposerAutoloadWarmer', $warmers[0]);
+    }
+
     private function getBoundStringInput($string, $configFile = null)
     {
         $input = $this->getUnboundStringInput($string, $configFile);
@@ -621,5 +639,117 @@ class ConfigurationTest extends TestCase
 
         // The CodeCleaner will not be updated after the first time we access it:
         $this->assertTrue($config->getCodeCleaner()->yolo());
+    }
+
+    public function testWarmAutoloadDefault()
+    {
+        $config = $this->getConfig();
+        $warmers = $config->getAutoloadWarmers();
+
+        // Default is disabled (opt-in)
+        $this->assertSame([], $warmers);
+    }
+
+    public function testWarmAutoloadDisabled()
+    {
+        $config = $this->getConfig();
+        $config->setWarmAutoload(false);
+
+        $this->assertSame([], $config->getAutoloadWarmers());
+    }
+
+    public function testWarmAutoloadEnabled()
+    {
+        $config = $this->getConfig();
+        $config->setWarmAutoload(true);
+
+        $warmers = $config->getAutoloadWarmers();
+        $this->assertCount(1, $warmers);
+        $this->assertInstanceOf('Psy\TabCompletion\AutoloadWarmer\ComposerAutoloadWarmer', $warmers[0]);
+    }
+
+    public function testWarmAutoloadWithEmptyArray()
+    {
+        $config = $this->getConfig();
+        $config->setWarmAutoload([]);
+
+        // Empty array = disabled (no actual config provided)
+        $this->assertSame([], $config->getAutoloadWarmers());
+    }
+
+    public function testWarmAutoloadWithComposerConfig()
+    {
+        $config = $this->getConfig();
+        $config->setWarmAutoload([
+            'includeVendor'     => true,
+            'excludeNamespaces' => ['App\\Legacy\\'],
+        ]);
+
+        $warmers = $config->getAutoloadWarmers();
+        $this->assertCount(1, $warmers);
+        $this->assertInstanceOf('Psy\TabCompletion\AutoloadWarmer\ComposerAutoloadWarmer', $warmers[0]);
+    }
+
+    public function testWarmAutoloadWithCustomWarmers()
+    {
+        $config = $this->getConfig();
+        $customWarmer = $this->getMockBuilder('Psy\TabCompletion\AutoloadWarmer\AutoloadWarmerInterface')->getMock();
+
+        $config->setWarmAutoload([
+            'warmers' => [$customWarmer],
+        ]);
+
+        $warmers = $config->getAutoloadWarmers();
+        $this->assertCount(1, $warmers);
+        $this->assertSame($customWarmer, $warmers[0]);
+    }
+
+    public function testWarmAutoloadWithCustomWarmersAndComposerConfig()
+    {
+        $config = $this->getConfig();
+        $customWarmer = $this->getMockBuilder('Psy\TabCompletion\AutoloadWarmer\AutoloadWarmerInterface')->getMock();
+
+        $config->setWarmAutoload([
+            'warmers'       => [$customWarmer],
+            'includeVendor' => true,
+        ]);
+
+        $warmers = $config->getAutoloadWarmers();
+        $this->assertCount(2, $warmers);
+        $this->assertSame($customWarmer, $warmers[0]);
+        $this->assertInstanceOf('Psy\TabCompletion\AutoloadWarmer\ComposerAutoloadWarmer', $warmers[1]);
+    }
+
+    public function testWarmAutoloadInvalidType()
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('warmAutoload must be a boolean or configuration array');
+
+        $config = $this->getConfig();
+        $config->setWarmAutoload('invalid');
+    }
+
+    public function testWarmAutoloadInvalidWarmersType()
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('warmAutoload[\'warmers\'] must be an array');
+
+        $config = $this->getConfig();
+        $config->setWarmAutoload([
+            'warmers' => 'not an array',
+        ]);
+        $config->getAutoloadWarmers();
+    }
+
+    public function testWarmAutoloadInvalidWarmerInstance()
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Autoload warmers must implement AutoloadWarmerInterface');
+
+        $config = $this->getConfig();
+        $config->setWarmAutoload([
+            'warmers' => [new \stdClass()],
+        ]);
+        $config->getAutoloadWarmers();
     }
 }

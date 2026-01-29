@@ -3,7 +3,7 @@
 /*
  * This file is part of Psy Shell.
  *
- * (c) 2012-2023 Justin Hileman
+ * (c) 2012-2026 Justin Hileman
  *
  * For the full copyright and license information, please view the LICENSE
  * file that was distributed with this source code.
@@ -30,6 +30,8 @@ class IssetPassTest extends CodeCleanerTestCase
 
     /**
      * @dataProvider invalidStatements
+     *
+     * @group php-parser-v4-fail
      */
     public function testProcessStatementFails($code)
     {
@@ -133,7 +135,7 @@ class IssetPassTest extends CodeCleanerTestCase
 
     public function validPHP8Statements()
     {
-        if (\version_compare(\PHP_VERSION, '8.0', '<')) {
+        if (\PHP_VERSION_ID < 80000) {
             $this->markTestSkipped();
         }
 

@@ -7,7 +7,7 @@ parameters:
   phpVersion: 70400
 
   # See: https://phpstan.org/user-guide/rule-levels
-  level: 1
+  level: 3
   paths:
     - src
     - test
@@ -16,6 +16,8 @@ parameters:
     # See: https://github.com/bobthecow/psysh/pull/738#issuecomment-1202622730
     - src/Readline/Hoa/FileLink.php
     - src/Util/Str.php
+    # Fake PSR-3 logger implements interface that may not exist when psr/log isn't installed
+    - test/Util/FakePsrLogger.php
   bootstrapFiles:
     - vendor-bin/phpstan/bootstrap.php
   reportUnmatchedIgnoredErrors: true

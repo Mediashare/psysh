@@ -3,7 +3,7 @@
 /*
  * This file is part of Psy Shell.
  *
- * (c) 2012-2023 Justin Hileman
+ * (c) 2012-2026 Justin Hileman
  *
  * For the full copyright and license information, please view the LICENSE
  * file that was distributed with this source code.
@@ -79,7 +79,7 @@ class ErrorExceptionTest extends \Psy\Test\TestCase
      */
     public function testThrowExceptionAsErrorHandler($level, $type)
     {
-        if (\version_compare(\PHP_VERSION, '8.4', '>=') && $level === \E_USER_ERROR) {
+        if (\PHP_VERSION_ID >= 80400 && $level === \E_USER_ERROR) {
             $this->markTestSkipped('Passing E_USER_ERROR to trigger_error() is deprecated since 8.4');
         }
 

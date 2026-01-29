@@ -10,21 +10,25 @@ ifneq ($(CI),)
 	PHPUNIT_OPTS = --verbose --coverage-clover=coverage.xml
 endif
 
+ifdef EXCLUDE_GROUP
+	PHPUNIT_OPTS += --exclude-group $(EXCLUDE_GROUP)
+endif
+
 
 # Commands
 
-.PHONY: help build clean dist test phpstan
+.PHONY: help build clean dist test test-phar smoketest phpstan
 .DEFAULT_GOAL := help
 
 help:
 	@echo "\033[33mUsage:\033[0m\n  make TARGET\n\n\033[33mTargets:\033[0m"
-	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[32m%-7s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[32m%-9s\033[0m %s\n", $$1, $$2}'
 
 build: ## Compile psysh PHAR
 build: build/psysh/psysh
 
 clean: ## Clean all created artifacts
-	rm -rf build/*
+	rm -rf build/psysh build/stub
 	rm -rf dist/*
 	rm -rf vendor-bin/*/vendor/
 
@@ -35,10 +39,29 @@ test: ## Run unit tests
 test: vendor/bin/phpunit
 	$< $(PHPUNIT_OPTS)
 
+test-phar: ## Run unit tests with PHAR bootstrap
+test-phar: build/psysh/psysh
+	$(eval PHAR_TEST_DIR := $(shell mktemp -d))
+	@echo "Setting up isolated test environment in $(PHAR_TEST_DIR)..."
+	@cp -r test $(PHAR_TEST_DIR)/
+	@cp $< $(PHAR_TEST_DIR)/
+	@cd $(PHAR_TEST_DIR) && \
+		COMPOSER_ROOT_VERSION=1.0.0 composer init --no-interaction --name=psy/test --autoload=test/ 2>&1 | grep -v "PSR-4" || true && \
+		COMPOSER_ROOT_VERSION=1.0.0 composer require --no-interaction --no-progress "phpunit/phpunit:^9.6" 2>&1 | grep -v "locking\|Extracting" | head -3 || true && \
+		vendor/bin/phpunit --bootstrap psysh --exclude-group isolation-fail test/
+	@rm -rf $(PHAR_TEST_DIR)
+
+smoketest: ## Run smoke tests on existing binaries
+smoketest: build/psysh/psysh
+	test/smoketest.sh
+
 phpstan: ## Run static analysis
 phpstan: vendor/bin/phpstan vendor/bin/phpunit
 	vendor/bin/phpstan --memory-limit=1G analyse
 
+phan: ## Run phan
+phan: vendor/bin/phan
+	vendor/bin/phan --allow-polyfill-parser
 
 # All the composer stuffs
 
@@ -66,22 +89,40 @@ vendor/bin/phpstan: vendor-bin/phpstan/vendor/autoload.php
 	composer bin phpstan install --ignore-platform-reqs
 	ln -sf ../../vendor-bin/phpstan/vendor/phpstan/phpstan/phpstan $@
 
+vendor/bin/phan: vendor/autoload.php
+	composer bin phan install --ignore-platform-reqs
+	ln -sf ../../vendor-bin/phan/vendor/phan/phan/phan $@
+	touch $@
+
 
 # Lots of PHARs
 
 build/stub: bin/build-stub bin/psysh LICENSE
 	bin/build-stub
 
-build/psysh: $(PSYSH_SRC) $(PSYSH_SRC_FILES)
+build/composer.lock: build/composer.json
+ifneq ($(CI),)
+	composer validate --check-lock --no-interaction --working-dir build
+else
+	composer update --working-dir build $(COMPOSER_UPDATE_OPTS)
+endif
+	touch $@
+
+build/psysh: $(PSYSH_SRC) $(PSYSH_SRC_FILES) build/composer.lock
 	rm -rf $@ || true
 	mkdir $@
 	cp -R $(PSYSH_SRC) $@/
+	cp build/composer.json build/composer.lock $@/
+	@# Fetch and include latest PHP manual
+	@if bin/fetch-manual; then \
+		echo "Including bundled manual..."; \
+		cp php_manual.php $@/; \
+		rm php_manual.php; \
+	else \
+		echo "Manual fetch failed, continuing without bundled manual"; \
+	fi
 	sed -i -e "/^ *const VERSION =/ s/'.*'/'$(VERSION)'/" $@/src/Shell.php
-	composer config --working-dir $@ platform.php 7.4
-	composer require --working-dir $@ $(COMPOSER_REQUIRE_OPTS) php:'>=7.4'
-	composer require --working-dir $@ $(COMPOSER_REQUIRE_OPTS) symfony/polyfill-iconv symfony/polyfill-mbstring
-	composer require --working-dir $@ $(COMPOSER_REQUIRE_OPTS) --dev roave/security-advisories:dev-latest
-	composer update --working-dir $@ $(COMPOSER_UPDATE_OPTS)
+	composer install --working-dir $@ $(COMPOSER_INSTALL_OPTS)
 
 build/%/psysh: vendor/bin/box build/%
 	vendor/bin/box compile --no-parallel --working-dir $(dir $@)

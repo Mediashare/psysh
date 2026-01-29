@@ -1,6 +1,5 @@
-codecov:
-    notify:
-        after_n_builds: 7
+ignore:
+    - src/Readline/Hoa
 
 coverage:
     range: "60..100"
@@ -8,3 +7,12 @@ coverage:
         project:
             default:
                 threshold: 1%
+                informational: false
+        patch:
+            default:
+                informational: true
+                target: auto
+                threshold: 0%
+
+comment:
+    require_changes: true

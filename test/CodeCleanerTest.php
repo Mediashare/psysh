@@ -3,7 +3,7 @@
 /*
  * This file is part of Psy Shell.
  *
- * (c) 2012-2023 Justin Hileman
+ * (c) 2012-2026 Justin Hileman
  *
  * For the full copyright and license information, please view the LICENSE
  * file that was distributed with this source code.
@@ -122,5 +122,57 @@ class CodeCleanerTest extends TestCase
             ['$foo "bar'],
             ['$foo \'bar'],
         ];
+    }
+
+    public function testNamespaceReEntryResetsUseStatements()
+    {
+        $cc = new CodeCleaner();
+
+        // Enter namespace A and add a use statement
+        $cc->clean(['namespace A;']);
+        $cc->clean(['use StdClass as Foo;']);
+
+        // Re-enter namespace A - should clear previous use statements
+        $cc->clean(['namespace A;']);
+
+        // Should be able to use same alias for a different class
+        $result = $cc->clean(['use DateTime as Foo;']);
+        $this->assertNotFalse($result);
+        $this->assertStringContainsString('DateTime', $result);
+    }
+
+    public function testGlobalNamespaceReEntryResetsUseStatements()
+    {
+        $cc = new CodeCleaner();
+
+        // Add use statement in global namespace
+        $cc->clean(['use StdClass as Bar;']);
+
+        // Enter braced global namespace - should clear previous use statements
+        $cc->clean(['namespace {}']);
+
+        // Should be able to use same alias for a different class
+        $result = $cc->clean(['use DateTime as Bar;']);
+        $this->assertNotFalse($result);
+        $this->assertStringContainsString('DateTime', $result);
+    }
+
+    public function testUseStatementsPersistWithinNamespace()
+    {
+        $cc = new CodeCleaner();
+
+        // Enter namespace and add use statement
+        $cc->clean(['namespace Foo;']);
+        $cc->clean(['use StdClass as Bar;']);
+
+        // Execute code without namespace declaration - use statement should persist
+        // and code should be wrapped in the namespace
+        $result = $cc->clean(['$x = new Bar();']);
+        $this->assertNotFalse($result);
+        $this->assertStringContainsString('namespace Foo', $result);
+
+        // The use statement should persist for resolveClassName
+        $resolved = $cc->resolveClassName('Bar');
+        $this->assertSame('\\StdClass', $resolved);
     }
 }

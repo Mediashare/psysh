@@ -3,7 +3,7 @@
 /*
  * This file is part of Psy Shell.
  *
- * (c) 2012-2023 Justin Hileman
+ * (c) 2012-2026 Justin Hileman
  *
  * For the full copyright and license information, please view the LICENSE
  * file that was distributed with this source code.
@@ -73,7 +73,7 @@ class ClassEnumeratorTest extends EnumeratorTestCase
         $this->assertArrayHasKey('Interfaces', $res);
         $fixtureClasses = \array_filter($res['Interfaces'], [$this, 'isFixtureClass']);
 
-        $prefix = \PHP_VERSION === '7.4.0' ? '<keyword>static</keyword> ' : '';
+        $prefix = \PHP_VERSION_ID === 70400 ? '<keyword>static</keyword> ' : '';
 
         $expected = [
             Fixtures\InterfaceDelta::class => [
@@ -148,7 +148,7 @@ class ClassEnumeratorTest extends EnumeratorTestCase
         $this->assertArrayHasKey('Classes', $res);
         $this->assertSame($expectedClasses, $res['Classes']);
 
-        $prefix = \PHP_VERSION === '7.4.0' ? '<keyword>static</keyword> ' : '';
+        $prefix = \PHP_VERSION_ID === 70400 ? '<keyword>static</keyword> ' : '';
         $expectedInterfaces = [
             Fixtures\InterfaceDelta::class => [
                 'name'  => Fixtures\InterfaceDelta::class,
