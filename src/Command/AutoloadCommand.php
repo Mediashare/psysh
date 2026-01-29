@@ -19,7 +19,7 @@ class AutoloadCommand extends Command
     private $projectRoot = null;
     private $loadedVariables = [];
 
-    protected function configure()
+    protected function configure(): void
     {
         $this
             ->setName('autoload')

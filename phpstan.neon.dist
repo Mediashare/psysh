@@ -3,8 +3,8 @@ includes:
   - vendor-bin/phpstan/ignore.neon
 
 parameters:
-  # Test on PHP 7.4
-  phpVersion: 70400
+  # Test on PHP 8.0
+  phpVersion: 80000
 
   # See: https://phpstan.org/user-guide/rule-levels
   level: 3

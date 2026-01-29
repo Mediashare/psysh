@@ -12,12 +12,13 @@
 namespace Psy\Input;
 
 use Symfony\Component\Console\Input\InputDefinition;
+use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\StringInput;
 
 /**
  * A StringInput subclass specialized for code arguments.
  */
-class ShellInput extends StringInput
+class ShellInput extends StringInput implements InputInterface
 {
     public const REGEX_STRING = '([^\s]+?)(?:\s|(?<!\\\\)"|(?<!\\\\)\'|$)';
 

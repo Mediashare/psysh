@@ -34,7 +34,7 @@ class ProfileCommand extends Command
         'Symfony\\Component\\VarDumper\\',
     ];
 
-    protected function configure()
+    protected function configure(): void
     {
         $this
             ->setName('profile')

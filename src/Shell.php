@@ -61,9 +61,10 @@ class Shell extends Application
 {
     const VERSION = 'v0.12.18';
 
+    private Configuration $config;
     private ?OutputInterface $output = null;
     private ?CodeCleaner $cleaner = null;
-    private OutputInterface $output;
+    
     private ?int $originalVerbosity = null;
     private ?Readline $readline = null;
     private array $inputBuffer;
@@ -1180,8 +1181,6 @@ class Shell extends Application
         if (empty($command)) {
             throw new \InvalidArgumentException('Command not found: '.$input);
         }
-
-        $input = new ShellInput(\str_replace('\\', '\\\\', \rtrim($input, " \t\n\r\0\x0B;")));
 
         // Remove the command name from input before creating ShellInput
         // This allows ShellInput to properly parse options like --debug, --full, etc.
